@@ -1,0 +1,76 @@
+# Rozliczenie Grupa A - Kwartał
+# Nagłówek + Podsumowanie + 3 tabele danych
+# Dane: CALL schema.procedura({nr}) → zwraca result set
+
+report_type: "Rozliczenie Grupa A - Kwartał"
+period_type: "quarterly"
+group: "A"
+
+# === PODSUMOWANIE (8 wierszy x 2 kolumny) ===
+summary:
+  title: "Podsumowanie"
+  labels:
+    - "Nazwa klienta"
+    - "Numer klienta"
+    - "Liczba podtypów"
+    - "Status"
+    - "Okres raportu"
+    - "Kwartał"
+    - "Opiekun"
+    - "E-mail"
+  query: "CALL SCHEMA.PROC_PODSUMOWANIE_A_KWARTAL({nr})"
+
+# === TABELE DANYCH ===
+data_tables:
+  - name: "table1"
+    title: "Rozliczenie kwartalne - Grupa A"
+    headers:
+      - "Podtyp"
+      - "Styczeń"
+      - "Luty"
+      - "Marzec"
+      - "Q1"
+      - "Wartość 1"
+      - "Wartość 2"
+      - "Suma"
+    query: "CALL SCHEMA.PROC_ROZLICZENIE_A_T1({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 5, 6, 7]
+      add_total_row: true
+      column_widths: null
+
+  - name: "table2"
+    title: "Szczegóły miesięczne"
+    headers:
+      - "Podtyp"
+      - "M1"
+      - "M2"
+      - "M3"
+      - "Średnia"
+      - "Min"
+      - "Max"
+      - "Odchylenie"
+    query: "CALL SCHEMA.PROC_SZCZEGOLY_A_T2({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 5, 6]
+      percentage_columns: [7]
+      add_total_row: true
+      column_widths: null
+
+  - name: "table3"
+    title: "Wskaźniki efektywności"
+    headers:
+      - "Podtyp"
+      - "KPI 1"
+      - "KPI 2"
+      - "KPI 3"
+      - "Trend"
+      - "Target"
+      - "Osiągnięcie"
+      - "Status"
+    query: "CALL SCHEMA.PROC_KPI_A_T3({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 5, 6]
+      percentage_columns: [4]
+      add_total_row: false
+      column_widths: null

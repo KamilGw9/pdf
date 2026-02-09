@@ -1,0 +1,111 @@
+# Wykonanie Grupa B - Typ B - Tydzień
+# Nagłówek + Podsumowanie + 5 tabel danych
+# Dane: CALL schema.procedura({nr}) → zwraca result set
+
+report_type: "Wykonanie Grupa B - Typ B - Tydzień"
+period_type: "weekly"
+group: "B"
+
+# === PODSUMOWANIE (8 wierszy x 2 kolumny) ===
+summary:
+  title: "Podsumowanie tygodniowe"
+  labels:
+    - "Nazwa klienta"
+    - "Numer klienta"
+    - "Liczba podtypów"
+    - "Status"
+    - "Tydzień"
+    - "Rok"
+    - "Opiekun"
+    - "E-mail"
+  query: "CALL SCHEMA.PROC_PODSUMOWANIE_B_TYDZIEN({nr})"
+
+# === TABELE DANYCH ===
+data_tables:
+  - name: "table1"
+    title: "Wykonanie dzienne - Typ B"
+    headers:
+      - "Podtyp"
+      - "Poniedziałek"
+      - "Wtorek"
+      - "Środa"
+      - "Czwartek"
+      - "Piątek"
+      - "Suma"
+      - "Plan"
+    query: "CALL SCHEMA.PROC_WYKONANIE_B_TYP_B_T1({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 5, 6, 7]
+      add_total_row: true
+      column_widths: null
+
+  - name: "table2"
+    title: "Realizacja planu"
+    headers:
+      - "Podtyp"
+      - "Plan"
+      - "Wykonanie"
+      - "Różnica"
+      - "Realizacja %"
+      - "Poprzedni tydz."
+      - "Zmiana"
+      - "Status"
+    query: "CALL SCHEMA.PROC_REALIZACJA_B_TYP_B_T2({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 5]
+      percentage_columns: [4, 6]
+      add_total_row: true
+      column_widths: null
+
+  - name: "table3"
+    title: "Koszty tygodniowe"
+    headers:
+      - "Podtyp"
+      - "Materiały"
+      - "Usługi"
+      - "Transport"
+      - "Energia"
+      - "Pozostałe"
+      - "Suma"
+      - "Budżet"
+    query: "CALL SCHEMA.PROC_KOSZTY_B_TYP_B_T3({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 5, 6, 7]
+      add_total_row: true
+      column_widths: null
+
+  - name: "table4"
+    title: "Wskaźniki efektywności"
+    headers:
+      - "Podtyp"
+      - "KPI 1"
+      - "KPI 2"
+      - "KPI 3"
+      - "KPI 4"
+      - "Target"
+      - "Osiągnięcie"
+      - "Ocena"
+    query: "CALL SCHEMA.PROC_KPI_B_TYP_B_T4({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 5]
+      percentage_columns: [6]
+      add_total_row: false
+      column_widths: null
+
+  - name: "table5"
+    title: "Analiza porównawcza"
+    headers:
+      - "Podtyp"
+      - "Tydzień -3"
+      - "Tydzień -2"
+      - "Tydzień -1"
+      - "Bieżący"
+      - "Zmiana %"
+      - "Średnia 4 tyg."
+      - "Prognoza"
+    query: "CALL SCHEMA.PROC_ANALIZA_B_TYP_B_T5({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 6, 7]
+      percentage_columns: [5]
+      add_total_row: false
+      column_widths: null

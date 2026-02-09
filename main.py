@@ -1,0 +1,480 @@
+﻿# -*- coding: utf-8 -*-
+"""
+Generator raportów PDF z danymi z SAP HANA.
+Układ: Nagłówek + Podsumowanie (góra) + N dynamicznych tabel (dół).
+Konfiguracja tabel w plikach YAML (folder config/).
+"""
+
+import os
+import json
+import time
+from datetime import datetime
+from typing import List, Dict, Any
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import (
+    SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph
+)
+from reportlab.lib.units import cm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.styles import ParagraphStyle
+
+
+# =========================================================================
+#  KONFIGURACJA
+# =========================================================================
+
+HANA_CONFIG = {
+    'address': '',       # UZUPEŁNIJ: np. 'hana-server.company.com'
+    'port': 30015,       # UZUPEŁNIJ: np. 30015
+    'user': '',          # UZUPEŁNIJ
+    'password': '',      # UZUPEŁNIJ
+    'schema': '',        # UZUPEŁNIJ: np. 'MY_SCHEMA'
+    'encrypt': True,
+    'sslValidateCertificate': False,
+}
+
+BASE_OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# =========================================================================
+#  CZCIONKI I KOLORY
+# =========================================================================
+
+try:
+    pdfmetrics.registerFont(TTFont('CenturyGothic', 'GOTHIC.TTF'))
+    pdfmetrics.registerFont(TTFont('CenturyGothic-Bold', 'GOTHICB.TTF'))
+    FONT_REGULAR = 'CenturyGothic'
+    FONT_BOLD = 'CenturyGothic-Bold'
+except Exception:
+    FONT_REGULAR = 'Helvetica'
+    FONT_BOLD = 'Helvetica-Bold'
+
+HEADER_BG_COLOR = colors.HexColor("#001E64")
+HEADER_TEXT_COLOR = colors.white
+ROW_ALT_COLOR = colors.HexColor("#F7F9FF")
+BORDER_COLOR = colors.HexColor("#CBD8F7")
+TEXT_COLOR = colors.HexColor("#001E64")
+
+
+# =========================================================================
+#  POŁĄCZENIE Z SAP HANA
+# =========================================================================
+
+def get_hana_connection():
+    """Tworzy i zwraca połączenie z SAP HANA."""
+    from hdbcli import dbapi
+
+    connection = dbapi.connect(
+        address=HANA_CONFIG['address'],
+        port=HANA_CONFIG['port'],
+        user=HANA_CONFIG['user'],
+        password=HANA_CONFIG['password'],
+        encrypt=HANA_CONFIG.get('encrypt', True),
+        sslValidateCertificate=HANA_CONFIG.get('sslValidateCertificate', False),
+    )
+
+    schema = HANA_CONFIG.get('schema', '')
+    if schema:
+        cursor = connection.cursor()
+        cursor.execute(f'SET SCHEMA "{schema}"')
+        cursor.close()
+
+    return connection
+
+
+# =========================================================================
+#  NARZĘDZIA
+# =========================================================================
+
+class Timer:
+    """Context manager do mierzenia czasu operacji."""
+
+    def __init__(self, name: str = "Operacja"):
+        self.name = name
+        self.elapsed = 0.0
+
+    def __enter__(self):
+        self._start = time.perf_counter()
+        print(f"⏱️  {self.name}...")
+        return self
+
+    def __exit__(self, *args):
+        self.elapsed = time.perf_counter() - self._start
+        print(f"   → {self.elapsed:.3f}s")
+
+    def formatted(self) -> str:
+        if self.elapsed < 1:
+            return f"{self.elapsed * 1000:.0f}ms"
+        return f"{self.elapsed:.2f}s"
+
+
+def get_output_folder(subfolder: str = None) -> str:
+    """Zwraca ścieżkę do folderu wyjściowego (tworzy jeśli brak)."""
+    today = datetime.now().strftime('%Y-%m-%d')
+    if subfolder:
+        folder_name = f"{today}#{subfolder}"
+    else:
+        folder_name = today
+    output_dir = os.path.join(BASE_OUTPUT_DIR, folder_name)
+    os.makedirs(output_dir, exist_ok=True)
+    return output_dir
+
+
+def get_output_path(filename: str, subfolder: str = None) -> str:
+    """Pełna ścieżka do pliku w folderze wyjściowym."""
+    return os.path.join(get_output_folder(subfolder), filename)
+
+
+def save_generation_log(results: List[Dict[str, Any]], output_dir: str) -> str:
+    """Zapisuje log generowania do JSON."""
+    log_data = {
+        'timestamp': datetime.now().isoformat(),
+        'output_directory': output_dir,
+        'total_reports': len(results),
+        'reports': results,
+    }
+    log_path = os.path.join(output_dir, 'generation_log.json')
+    with open(log_path, 'w', encoding='utf-8') as f:
+        json.dump(log_data, f, indent=2, ensure_ascii=False)
+    return log_path
+
+
+# =========================================================================
+#  FORMATOWANIE WARTOŚCI
+# =========================================================================
+
+def is_numeric(value) -> bool:
+    """Sprawdza czy wartość jest liczbą."""
+    try:
+        float(str(value).replace(',', '.').replace(' ', ''))
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+
+def format_as_currency(value) -> str:
+    """Formatuje wartość jako walutę PLN (np. '1 234,56 zł')."""
+    try:
+        num = float(str(value).replace(',', '.').replace(' ', ''))
+        return f"{num:,.2f}".replace(',', ' ').replace('.', ',') + " zł"
+    except (ValueError, AttributeError):
+        return str(value)
+
+
+def format_as_percentage(value) -> str:
+    """Formatuje wartość jako procent."""
+    try:
+        num = float(str(value).replace(',', '.').replace(' ', ''))
+        return f"{num:.2f}%"
+    except (ValueError, AttributeError):
+        return str(value)
+
+
+def calculate_column_sum(data: List[List[str]], col_index: int) -> str:
+    """Oblicza sumę wartości w kolumnie."""
+    total = 0.0
+    has_numbers = False
+    for row in data:
+        if col_index < len(row) and is_numeric(row[col_index]):
+            total += float(str(row[col_index]).replace(',', '.').replace(' ', ''))
+            has_numbers = True
+    return str(total) if has_numbers else ''
+
+
+# =========================================================================
+#  STYLE TABEL
+# =========================================================================
+
+def get_summary_table_style() -> TableStyle:
+    """Styl dla tabeli podsumowania."""
+    return TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG_COLOR),
+        ('TEXTCOLOR', (0, 0), (-1, 0), HEADER_TEXT_COLOR),
+        ('FONTNAME', (0, 0), (-1, 0), FONT_BOLD),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('ALIGN', (0, 0), (-1, 0), 'LEFT'),
+        ('SPAN', (0, 0), (-1, 0)),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, ROW_ALT_COLOR]),
+        ('TEXTCOLOR', (0, 1), (0, -1), TEXT_COLOR),
+        ('FONTNAME', (0, 1), (0, -1), FONT_BOLD),
+        ('FONTSIZE', (0, 1), (0, -1), 7),
+        ('ALIGN', (0, 1), (0, -1), 'LEFT'),
+        ('TEXTCOLOR', (1, 1), (1, -1), TEXT_COLOR),
+        ('FONTNAME', (1, 1), (1, -1), FONT_REGULAR),
+        ('FONTSIZE', (1, 1), (1, -1), 7),
+        ('ALIGN', (1, 1), (1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, BORDER_COLOR),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ])
+
+
+def get_large_table_style(has_total_row: bool = False) -> TableStyle:
+    """Styl dla dużych tabel danych."""
+    cmds = [
+        ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG_COLOR),
+        ('TEXTCOLOR', (0, 0), (-1, 0), HEADER_TEXT_COLOR),
+        ('FONTNAME', (0, 0), (-1, 0), FONT_BOLD),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('ALIGN', (0, 0), (-1, 0), 'LEFT'),
+        ('SPAN', (0, 0), (-1, 0)),
+        ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor("#E8ECF4")),
+        ('TEXTCOLOR', (0, 1), (-1, 1), TEXT_COLOR),
+        ('FONTNAME', (0, 1), (-1, 1), FONT_BOLD),
+        ('FONTSIZE', (0, 1), (-1, 1), 8),
+        ('ALIGN', (0, 1), (-1, 1), 'CENTER'),
+        ('TEXTCOLOR', (0, 2), (-1, -2 if has_total_row else -1), TEXT_COLOR),
+        ('FONTNAME', (0, 2), (-1, -2 if has_total_row else -1), FONT_REGULAR),
+        ('FONTSIZE', (0, 2), (-1, -2 if has_total_row else -1), 8),
+        ('ALIGN', (0, 2), (-1, -2 if has_total_row else -1), 'RIGHT'),
+        ('ROWBACKGROUNDS', (0, 2), (-1, -2 if has_total_row else -1),
+         [colors.white, ROW_ALT_COLOR]),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]
+    if has_total_row:
+        cmds.extend([
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#E8ECF4")),
+            ('TEXTCOLOR', (0, -1), (-1, -1), TEXT_COLOR),
+            ('FONTNAME', (0, -1), (-1, -1), FONT_BOLD),
+            ('FONTSIZE', (0, -1), (-1, -1), 8),
+            ('ALIGN', (0, -1), (0, -1), 'LEFT'),
+            ('ALIGN', (1, -1), (-1, -1), 'RIGHT'),
+            ('LINEABOVE', (0, -1), (-1, -1), 1.5, BORDER_COLOR),
+        ])
+    return TableStyle(cmds)
+
+
+# =========================================================================
+#  BUDOWANIE TABEL
+# =========================================================================
+
+def create_summary_table(title: str, summary_data: List[List[str]]) -> Table:
+    """Tworzy pionową tabelę podsumowania (tytuł + pary etykieta/wartość)."""
+    cell_style = ParagraphStyle(
+        'SummaryCell', fontName=FONT_REGULAR, fontSize=7,
+        textColor=TEXT_COLOR, leading=9,
+    )
+    table_data = [[title, '']]
+    for row in summary_data:
+        label = row[0] if len(row) > 0 else ''
+        value = row[1] if len(row) > 1 else ''
+        table_data.append([label, Paragraph(str(value), cell_style)])
+
+    while len(table_data) < 9:
+        table_data.append(['', ''])
+
+    col_widths = [3.5 * cm, 5.0 * cm]
+    row_heights = [0.6 * cm] + [0.5 * cm] * (len(table_data) - 2) + [None]
+    table = Table(table_data, colWidths=col_widths, rowHeights=row_heights)
+    table.setStyle(get_summary_table_style())
+    return table
+
+
+def create_report_header(client_name: str) -> List:
+    """Tworzy nagłówek raportu: tytuł + data."""
+    title_style = ParagraphStyle(
+        'ReportTitle', fontName=FONT_BOLD, fontSize=24,
+        textColor=TEXT_COLOR, spaceAfter=4, leading=30,
+    )
+    date_style = ParagraphStyle(
+        'ReportDate', fontName=FONT_REGULAR, fontSize=10,
+        textColor=colors.HexColor("#666666"), spaceAfter=6,
+    )
+    return [
+        Paragraph("Twój raport", title_style),
+        Paragraph(f"Data wygenerowania: {datetime.now().strftime('%d.%m.%Y')}", date_style),
+    ]
+
+
+def create_large_table(title: str, headers: List[str], data: List[List[str]],
+                       col_widths: List[float] = None,
+                       add_total_row: bool = True,
+                       currency_columns: List[int] = None,
+                       percentage_columns: List[int] = None) -> Table:
+    """Tworzy dużą tabelę danych z opcjonalnym wierszem sumy."""
+    num_cols = len(headers)
+    currency_columns = currency_columns or []
+    percentage_columns = percentage_columns or []
+
+    if col_widths is None:
+        available = A4[0] - 2 * cm
+        col_widths = [available / num_cols] * num_cols
+
+    table_data = [[title] + [''] * (num_cols - 1)]
+    table_data.append(headers)
+
+    for row in data:
+        padded = (row + [''] * num_cols)[:num_cols]
+        formatted = []
+        for i, val in enumerate(padded):
+            if i in currency_columns and is_numeric(val):
+                formatted.append(format_as_currency(val))
+            elif i in percentage_columns and is_numeric(val):
+                formatted.append(format_as_percentage(val))
+            else:
+                formatted.append(val)
+        table_data.append(formatted)
+
+    if add_total_row and data:
+        total = ['SUMA']
+        for ci in range(1, num_cols):
+            s = calculate_column_sum(data, ci)
+            if s and ci in currency_columns:
+                total.append(format_as_currency(s))
+            elif s and ci in percentage_columns:
+                total.append(format_as_percentage(s))
+            elif s:
+                total.append(s)
+            else:
+                total.append('')
+        table_data.append(total)
+
+    if not data:
+        for _ in range(3):
+            table_data.append([''] * num_cols)
+
+    row_heights = [0.7 * cm] * len(table_data)
+    table = Table(table_data, colWidths=col_widths, rowHeights=row_heights)
+    table.setStyle(get_large_table_style(has_total_row=add_total_row and bool(data)))
+    return table
+
+
+# =========================================================================
+#  GÓRNA SEKCJA
+# =========================================================================
+
+def create_top_section(client_name: str, summary_title: str,
+                       summary_data: List[List[str]]) -> List:
+    """Tworzy górną sekcję: nagłówek po lewej, podsumowanie po prawej."""
+    header_elems = create_report_header(client_name)
+    header_table = Table([[header_elems[0]], [header_elems[1]]])
+    header_table.setStyle(TableStyle([
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+    ]))
+
+    summary = create_summary_table(summary_title, summary_data)
+    page_width = A4[0] - 2 * cm
+
+    container = Table(
+        [[header_table, summary]],
+        colWidths=[page_width * 0.52, page_width * 0.48],
+    )
+    container.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+        ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    return [container]
+
+
+# =========================================================================
+#  GENEROWANIE PDF
+# =========================================================================
+
+def generate_pdf(client_name: str, summary_title: str,
+                 summary_data: List[List[str]],
+                 tables: List[Dict[str, Any]],
+                 filename: str = "raport.pdf",
+                 subfolder: str = None) -> str:
+    """
+    Generuje PDF z dynamiczną liczbą tabel.
+
+    Args:
+        client_name: Nazwa klienta (do nagłówka)
+        summary_title: Tytuł tabeli podsumowania
+        summary_data: Dane podsumowania [[etykieta, wartość], ...]
+        tables: Lista słowników opisujących tabele:
+                [{'title', 'headers', 'data', 'currency_columns',
+                  'percentage_columns', 'add_total_row', 'column_widths'}, ...]
+        filename: Nazwa pliku PDF
+        subfolder: Opcjonalny podfolder wyjściowy
+
+    Returns:
+        Ścieżka do wygenerowanego pliku
+    """
+    output_path = get_output_path(filename, subfolder)
+
+    doc = SimpleDocTemplate(
+        output_path, pagesize=A4,
+        leftMargin=1 * cm, rightMargin=1 * cm,
+        topMargin=1 * cm, bottomMargin=1 * cm,
+    )
+
+    elements = create_top_section(client_name, summary_title, summary_data)
+    elements.append(Spacer(1, 0.8 * cm))
+
+    for i, t in enumerate(tables):
+        table = create_large_table(
+            title=t['title'],
+            headers=t['headers'],
+            data=t['data'],
+            col_widths=t.get('column_widths'),
+            add_total_row=t.get('add_total_row', True),
+            currency_columns=t.get('currency_columns', []),
+            percentage_columns=t.get('percentage_columns', []),
+        )
+        elements.append(table)
+        if i < len(tables) - 1:
+            elements.append(Spacer(1, 0.5 * cm))
+
+    doc.build(elements)
+    print(f"✓ PDF: {output_path} ({len(tables)} tabel)")
+    return output_path
+
+
+# =========================================================================
+#  MAIN
+# =========================================================================
+
+if __name__ == "__main__":
+    from report_factory import ReportFactory
+
+    print("=" * 60)
+    print("  GENERATOR RAPORTÓW PDF")
+    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 60)
+
+    with Timer("Generowanie raportów") as total:
+        try:
+            factory = ReportFactory(config_dir="config")
+            numery = factory.get_clients_list()
+            print(f"\n📋 Numery klientów: {numery}")
+
+            all_generated = []
+            for nr in numery:
+                print(f"\n{'─' * 50}")
+                print(f"NR: {nr}")
+                generated = factory.generate_all_for_nr(nr)
+                all_generated.extend(generated)
+
+            print(f"\n{'─' * 50}")
+            print(f"✓ Wygenerowano {len(all_generated)} raportów")
+            for path in all_generated:
+                print(f"   → {os.path.basename(path)}")
+        except Exception as e:
+            print(f"\n✗ Błąd: {e}")
+            import traceback
+            traceback.print_exc()
+
+    print(f"\n📁 Folder: {get_output_folder()}")
+    print(f"⏱️  Czas: {total.formatted()}")
+

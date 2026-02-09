@@ -1,0 +1,95 @@
+# Rozliczenie Grupa B - Miesiąc
+# Nagłówek + Podsumowanie + 4 tabele danych
+# Dane: CALL schema.procedura({nr}) → zwraca result set
+
+report_type: "Rozliczenie Grupa B - Miesiąc"
+period_type: "monthly"
+group: "B"
+
+# === PODSUMOWANIE (8 wierszy x 2 kolumny) ===
+summary:
+  title: "Podsumowanie miesięczne"
+  labels:
+    - "Nazwa klienta"
+    - "Numer klienta"
+    - "Liczba podtypów"
+    - "Status"
+    - "Miesiąc"
+    - "Rok"
+    - "Opiekun"
+    - "E-mail"
+  query: "CALL SCHEMA.PROC_PODSUMOWANIE_B_MIESIAC({nr})"
+
+# === TABELE DANYCH ===
+data_tables:
+  - name: "table1"
+    title: "Przychody miesięczne"
+    headers:
+      - "Podtyp"
+      - "Tydzień 1"
+      - "Tydzień 2"
+      - "Tydzień 3"
+      - "Tydzień 4"
+      - "Suma"
+      - "Średnia dzienna"
+      - "Trend"
+    query: "CALL SCHEMA.PROC_PRZYCHODY_B_T1({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 5, 6]
+      percentage_columns: [7]
+      add_total_row: true
+      column_widths: null
+
+  - name: "table2"
+    title: "Koszty operacyjne"
+    headers:
+      - "Podtyp"
+      - "Materiały"
+      - "Usługi"
+      - "Transport"
+      - "Energia"
+      - "Pozostałe"
+      - "Suma kosztów"
+      - "Udział %"
+    query: "CALL SCHEMA.PROC_KOSZTY_B_T2({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 5, 6]
+      percentage_columns: [7]
+      add_total_row: true
+      column_widths: null
+
+  - name: "table3"
+    title: "Wynik finansowy"
+    headers:
+      - "Podtyp"
+      - "Przychód"
+      - "Koszty"
+      - "Marża"
+      - "Marża %"
+      - "Plan"
+      - "Odchylenie"
+      - "Status"
+    query: "CALL SCHEMA.PROC_WYNIK_B_T3({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 5, 6]
+      percentage_columns: [4]
+      add_total_row: true
+      column_widths: null
+
+  - name: "table4"
+    title: "Analiza trendów"
+    headers:
+      - "Podtyp"
+      - "M-3"
+      - "M-2"
+      - "M-1"
+      - "Bieżący"
+      - "Zmiana m/m"
+      - "Zmiana r/r"
+      - "Prognoza"
+    query: "CALL SCHEMA.PROC_TRENDY_B_T4({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 7]
+      percentage_columns: [5, 6]
+      add_total_row: false
+      column_widths: null

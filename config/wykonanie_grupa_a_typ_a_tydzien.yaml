@@ -1,0 +1,59 @@
+# Wykonanie Grupa A - Typ A - Tydzień
+# Nagłówek + Podsumowanie + 2 tabele danych
+# Dane: CALL schema.procedura({nr}) → zwraca result set
+
+report_type: "Wykonanie Grupa A - Typ A - Tydzień"
+period_type: "weekly"
+group: "A"
+
+# === PODSUMOWANIE (8 wierszy x 2 kolumny) ===
+summary:
+  title: "Podsumowanie tygodniowe"
+  labels:
+    - "Nazwa klienta"
+    - "Numer klienta"
+    - "Liczba podtypów"
+    - "Status"
+    - "Tydzień"
+    - "Rok"
+    - "Opiekun"
+    - "E-mail"
+  # UZUPEŁNIJ: nazwa procedury, {nr} zostanie podstawiony automatycznie
+  query: "CALL SCHEMA.PROC_PODSUMOWANIE_A_TYDZIEN({nr})"
+
+# === TABELE DANYCH ===
+data_tables:
+  - name: "table1"
+    title: "Wykonanie tygodniowe - Typ A"
+    headers:
+      - "Podtyp"
+      - "Poniedziałek"
+      - "Wtorek"
+      - "Środa"
+      - "Czwartek"
+      - "Piątek"
+      - "Suma tydzień"
+      - "Plan tydzień"
+    query: "CALL SCHEMA.PROC_WYKONANIE_A_TYP_A_T1({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 4, 5, 6, 7]
+      add_total_row: true
+      column_widths: null
+
+  - name: "table2"
+    title: "Realizacja vs Plan - Typ A"
+    headers:
+      - "Podtyp"
+      - "Plan"
+      - "Wykonanie"
+      - "Różnica"
+      - "Realizacja %"
+      - "Poprzedni tydz."
+      - "Zmiana"
+      - "Status"
+    query: "CALL SCHEMA.PROC_REALIZACJA_A_TYP_A_T2({nr})"
+    formatting:
+      currency_columns: [1, 2, 3, 5]
+      percentage_columns: [4, 6]
+      add_total_row: true
+      column_widths: null
