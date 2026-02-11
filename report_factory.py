@@ -52,6 +52,7 @@ class QueryCache:
     def __init__(self, connection):
         self._conn = connection
         self._cache: Dict[str, List[list]] = {}  # base_query → all rows
+        self._base_query_cache: Dict[str, tuple] = {}  # template → (base_q, nr_col, lok_col, added)
         self._query_count = 0
 
     @property
@@ -171,6 +172,12 @@ class QueryCache:
         """Zwraca query z placeholder'ami {nr}/{lok} — jako klucz cache."""
         return query.strip()
 
+    def _get_base_query_cached(self, template: str) -> tuple:
+        """Cache'owana wersja _make_base_query — regex tylko raz."""
+        if template not in self._base_query_cache:
+            self._base_query_cache[template] = self._make_base_query(template)
+        return self._base_query_cache[template]
+
     def prefetch(self, queries: List[str]):
         """
         Pobiera dane dla wszystkich unikalnych zapytań naraz.
@@ -183,7 +190,7 @@ class QueryCache:
                 continue
             seen.add(template)
 
-            base_q, nr_col, lok_col, added = self._make_base_query(template)
+            base_q, nr_col, lok_col, added = self._get_base_query_cached(template)
 
             cursor = self._conn.cursor()
             try:
@@ -209,7 +216,7 @@ class QueryCache:
         Jeśli nie ma w cache, wykonuje zapytanie tradycyjnie (fallback).
         """
         template = self._get_template_query(query_template)
-        _, nr_col, lok_col, added_count = self._make_base_query(template)
+        _, nr_col, lok_col, added_count = self._get_base_query_cached(template)
 
         if template not in self._cache:
             # Fallback – zapytanie tradycyjne
@@ -419,13 +426,26 @@ class ReportFactory:
         """
         Pobiera listę lokalizacji (sklepów) dla danej umowy.
         Używane przy Typ B – raport per lokalizacja.
+        Korzysta z cache jeśli dostępny (batch mode).
         
         DOSTOSUJ zapytanie do swojej tabeli!
         """
+        # Próbuj z cache (batch) – szukaj zapytania sklepowego
+        if self._cache is not None:
+            for rt, cfg in self.configs.items():
+                for table_cfg in cfg.get('data_tables', []):
+                    q = table_cfg.get('query', '')
+                    if 'nazwa_sklepu' in q.lower():
+                        rows = self._cache.get(q, nr=nr_umowy)
+                        # Kolumna 0 = nazwa_sklepu (pierwsza w SELECT)
+                        shops = sorted(set(r[0] for r in rows if r))
+                        if shops:
+                            return shops
+
+        # Fallback – bezpośrednie zapytanie
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
-            # ZMIEŃ to zapytanie na swoje:
             query = f"""
                 SELECT DISTINCT nazwa_sklepu 
                 FROM your_shops_table

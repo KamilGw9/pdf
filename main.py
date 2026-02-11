@@ -10,6 +10,7 @@ import json
 import time
 from datetime import datetime
 from typing import List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -369,6 +370,17 @@ def _wrap_cell(value: str, style: ParagraphStyle) -> Paragraph:
     return Paragraph(str(value), style)
 
 
+def _wrap_header(value: str, style: ParagraphStyle) -> Paragraph:
+    """
+    Opakowuje nagłówek w Paragraph z ochroną przed dzieleniem słów.
+    Każde słowo jest w <nobr> – nie zostanie rozerwane w środku.
+    Łamanie wiersza następuje TYLKO między pełnymi wyrazami.
+    """
+    words = str(value).split(' ')
+    safe = '&nbsp;'.join(f'<nobr>{w}</nobr>' for w in words)
+    return Paragraph(safe, style)
+
+
 def create_large_table(title: str, headers: List[str], data: List[List[str]],
                        col_widths: List[float] = None,
                        add_total_row: bool = True,
@@ -424,9 +436,9 @@ def create_large_table(title: str, headers: List[str], data: List[List[str]],
     display_title = f"{title} – {subtitle}" if subtitle else title
     table_data = [[display_title] + [''] * (num_cols - 1)]
 
-    # --- Nagłówki (zawinięte w Paragraph) ---
+    # --- Nagłówki (zawinięte w Paragraph, bez dzielenia słów) ---
     table_data.append([
-        _wrap_cell(h, header_para_style) for h in headers
+        _wrap_header(h, header_para_style) for h in headers
     ])
 
     # --- Dane ---
@@ -593,28 +605,89 @@ if __name__ == "__main__":
     # Na razie skupiamy się na 2 szablonach wykonania:
     ACTIVE_TYPES = [
         ReportType.WYKONANIE_A_TYP_A_TYDZIEN,  # per umowa (wszystkie sklepy)
-        ReportType.WYKONANIE_A_TYP_B_TYDZIEN,  # per lokalizacja (wybrany sklep)
+        # ReportType.WYKONANIE_A_TYP_B_TYDZIEN,  # per lokalizacja (wybrany sklep)
     ]
+    
+    # Opcjonalnie: generuj tylko dla wybranej umowy (ustaw na None aby generować dla wszystkich)
+    SINGLE_CONTRACT = None  # Zmień na numer umowy lub None
 
     with Timer("Generowanie raportów") as total:
+        factory = None
         try:
-            factory = ReportFactory(config_dir="config")
+            # 1 połączenie na cały run
+            connection = get_hana_connection()
+            factory = ReportFactory(config_dir="config", connection=connection)
+
+            # BATCH PREFETCH – wszystkie dane za jednym razem
+            factory.prepare_batch(report_types=ACTIVE_TYPES)
 
             # Pobierz listę umów
             contracts = factory.get_contracts_list()
+            
+            # Filtruj jeśli wybrano konkretną umowę
+            if SINGLE_CONTRACT:
+                contracts = [c for c in contracts if c['nr_umowy'] == SINGLE_CONTRACT]
+                if not contracts:
+                    print(f"\n✗ Nie znaleziono umowy: {SINGLE_CONTRACT}")
+                    exit(0)
+            
             print(f"\n📋 Umowy ({len(contracts)}):")
             for c in contracts:
                 print(f"   {c['nr_umowy']}  {c['klient']}  [{c['podtyp_klient']}]")
 
+            # Rozdziel typy A (1 raport per nr_umowy) i B (1 raport per klient)
+            TYP_A_TYPES = [rt for rt in ACTIVE_TYPES if rt in (
+                ReportType.WYKONANIE_A_TYP_A_TYDZIEN,
+                ReportType.WYKONANIE_B_TYP_A_TYDZIEN,
+                ReportType.ROZLICZENIE_A_KWARTAL,
+                ReportType.ROZLICZENIE_B_KWARTAL,
+                ReportType.ROZLICZENIE_B_MIESIAC,
+            )]
+            TYP_B_TYPES = [rt for rt in ACTIVE_TYPES if rt in (
+                ReportType.WYKONANIE_A_TYP_B_TYDZIEN,
+                ReportType.WYKONANIE_B_TYP_B_TYDZIEN,
+            )]
+
             all_generated = []
-            for c in contracts:
-                nr = c['nr_umowy']
-                print(f"\n{'─' * 50}")
-                print(f"UMOWA: {nr}  |  {c['klient']}")
-                generated = factory.generate_all_for_nr(
-                    nr, report_types=ACTIVE_TYPES
-                )
-                all_generated.extend(generated)
+            pdf_tasks = []  # (report_type, nr, lokalizacja)
+
+            # --- Typ A: 1 raport per unikalna umowa ---
+            if TYP_A_TYPES:
+                seen_nr = set()
+                for c in contracts:
+                    nr = c['nr_umowy']
+                    if nr in seen_nr:
+                        continue
+                    seen_nr.add(nr)
+                    for rt in TYP_A_TYPES:
+                        if rt in factory.configs:
+                            pdf_tasks.append((rt, nr, None))
+
+            # --- Typ B: 1 raport per klient (każdy wiersz) ---
+            if TYP_B_TYPES:
+                for c in contracts:
+                    nr = c['nr_umowy']
+                    for rt in TYP_B_TYPES:
+                        if rt in factory.configs:
+                            pdf_tasks.append((rt, nr, None))
+
+            # --- Równoległe generowanie PDF ---
+            MAX_WORKERS = min(8, os.cpu_count() or 4)
+            print(f"\n⚡ Generowanie {len(pdf_tasks)} raportów ({MAX_WORKERS} wątków)...")
+
+            def _gen_task(task):
+                rt, nr, lok = task
+                return factory.generate_report(rt, nr, lokalizacja=lok)
+
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+                futures = {pool.submit(_gen_task, t): t for t in pdf_tasks}
+                for future in as_completed(futures):
+                    try:
+                        path = future.result()
+                        all_generated.append(path)
+                    except Exception as e:
+                        task = futures[future]
+                        print(f"  ✗ {task[0].value} nr={task[1]}: {e}")
 
             print(f"\n{'─' * 50}")
             print(f"✓ Wygenerowano {len(all_generated)} raportów")
@@ -624,6 +697,9 @@ if __name__ == "__main__":
             print(f"\n✗ Błąd: {e}")
             import traceback
             traceback.print_exc()
+        finally:
+            if factory:
+                factory.close()
 
     print(f"\n📁 Folder: {get_output_folder()}")
     print(f"⏱️  Czas: {total.formatted()}")
