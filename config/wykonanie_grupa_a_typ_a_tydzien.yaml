@@ -1,59 +1,113 @@
 # Wykonanie Grupa A - Typ A - Tydzień
-# Nagłówek + Podsumowanie + 2 tabele danych
-# Dane: CALL schema.procedura({nr}) → zwraca result set
+# Generowany DLA KAŻDEJ UMOWY (wszystkie sklepy)
+# Struktura:
+#   Nagłówek "Twój raport" + data  |  Tabela 1 - Podsumowanie (8x2)
+#   Tabela 2 - Nagłówek duży (5x2)
+#   Tabela 3a - Sklepy grupa umowa X (11xN + SUMA)
+#   Tabela 3b - Sklepy grupa umowa Y (11xN + SUMA)
+#   Tabela 3c - Sklepy grupa umowa Z (11xN + SUMA)
 
 report_type: "Wykonanie Grupa A - Typ A - Tydzień"
 period_type: "weekly"
 group: "A"
 
-# === PODSUMOWANIE (8 wierszy x 2 kolumny) ===
+# === TABELA 1 – PODSUMOWANIE (8 wierszy x 2 kolumny) ===
 summary:
-  title: "Podsumowanie tygodniowe"
+  title: "Dane raportu"
   labels:
-    - "Nazwa klienta"
-    - "Numer klienta"
-    - "Liczba podtypów"
-    - "Status"
-    - "Tydzień"
+    - "Nr umowy"
+    - "Typ"
+    - "Nazwa"
+    - "Lok"
     - "Rok"
-    - "Opiekun"
-    - "E-mail"
-  # UZUPEŁNIJ: nazwa procedury, {nr} zostanie podstawiony automatycznie
-  query: "CALL SCHEMA.PROC_PODSUMOWANIE_A_TYDZIEN({nr})"
+    - "Kwar"
+    - "DR"
+    - "EMail"
+  query: "CALL SCHEMA.PROC_SUMMARY_WYKONANIE_A({nr})"
 
 # === TABELE DANYCH ===
 data_tables:
-  - name: "table1"
-    title: "Wykonanie tygodniowe - Typ A"
+  # --- TABELA 2 – Nagłówek duży (5x2) ---
+  - name: "header_table"
+    title: "Podsumowanie finansowe"
     headers:
-      - "Podtyp"
-      - "Poniedziałek"
-      - "Wtorek"
-      - "Środa"
-      - "Czwartek"
-      - "Piątek"
-      - "Suma tydzień"
-      - "Plan tydzień"
-    query: "CALL SCHEMA.PROC_WYKONANIE_A_TYP_A_T1({nr})"
+      - "Rabat"
+      - "Rabat"
+      - "Udzielony"
+      - "Wartość"
+      - "Wypłata"
+    query: "CALL SCHEMA.PROC_HEADER_WYKONANIE_A({nr})"
     formatting:
-      currency_columns: [1, 2, 3, 4, 5, 6, 7]
+      percentage_columns: [0, 1]
+      currency_columns: [2, 3, 4]
+      add_total_row: false
+      column_widths: null
+
+  # --- TABELA 3a – Sklepy: grupa umowa X ---
+  - name: "sklepy_x"
+    title: "Wykonanie tygodniowe"
+    subtitle: "Grupa umowa → X"
+    headers:
+      - "Nazwa sklepu"
+      - "Grupa umowa"
+      - "Klasyfikacja"
+      - "Typ lok"
+      - "Podstawa"
+      - "Bonus"
+      - "Wyprac"
+      - "Bonus łącz"
+      - "Wartość bonusu"
+      - "Udzielony rabat"
+      - "Wartość do wyr"
+    query: "CALL SCHEMA.PROC_SKLEPY_WYKONANIE_A_X({nr})"
+    formatting:
+      currency_columns: [4, 8, 9, 10]
+      percentage_columns: [5, 6, 7]
       add_total_row: true
       column_widths: null
 
-  - name: "table2"
-    title: "Realizacja vs Plan - Typ A"
+  # --- TABELA 3b – Sklepy: grupa umowa Y ---
+  - name: "sklepy_y"
+    title: "Wykonanie tygodniowe"
+    subtitle: "Grupa umowa → Y"
     headers:
-      - "Podtyp"
-      - "Plan"
-      - "Wykonanie"
-      - "Różnica"
-      - "Realizacja %"
-      - "Poprzedni tydz."
-      - "Zmiana"
-      - "Status"
-    query: "CALL SCHEMA.PROC_REALIZACJA_A_TYP_A_T2({nr})"
+      - "Nazwa sklepu"
+      - "Grupa umowa"
+      - "Klasyfikacja"
+      - "Typ lok"
+      - "Podstawa"
+      - "Bonus"
+      - "Wyprac"
+      - "Bonus łącz"
+      - "Wartość bonusu"
+      - "Udzielony rabat"
+      - "Wartość do wyr"
+    query: "CALL SCHEMA.PROC_SKLEPY_WYKONANIE_A_Y({nr})"
     formatting:
-      currency_columns: [1, 2, 3, 5]
-      percentage_columns: [4, 6]
+      currency_columns: [4, 8, 9, 10]
+      percentage_columns: [5, 6, 7]
+      add_total_row: true
+      column_widths: null
+
+  # --- TABELA 3c – Sklepy: grupa umowa Z ---
+  - name: "sklepy_z"
+    title: "Wykonanie tygodniowe"
+    subtitle: "Grupa umowa → Z"
+    headers:
+      - "Nazwa sklepu"
+      - "Grupa umowa"
+      - "Klasyfikacja"
+      - "Typ lok"
+      - "Podstawa"
+      - "Bonus"
+      - "Wyprac"
+      - "Bonus łącz"
+      - "Wartość bonusu"
+      - "Udzielony rabat"
+      - "Wartość do wyr"
+    query: "CALL SCHEMA.PROC_SKLEPY_WYKONANIE_A_Z({nr})"
+    formatting:
+      currency_columns: [4, 8, 9, 10]
+      percentage_columns: [5, 6, 7]
       add_total_row: true
       column_widths: null

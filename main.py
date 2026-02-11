@@ -26,6 +26,10 @@ from reportlab.lib.styles import ParagraphStyle
 #  KONFIGURACJA
 # =========================================================================
 
+# Przełącznik: True = dane mockowe, False = prawdziwa baza SAP HANA
+# Aby przełączyć na produkcję: ustaw USE_MOCK = False i uzupełnij HANA_CONFIG
+USE_MOCK = True
+
 HANA_CONFIG = {
     'address': '',       # UZUPEŁNIJ: np. 'hana-server.company.com'
     'port': 30015,       # UZUPEŁNIJ: np. 30015
@@ -54,8 +58,8 @@ except Exception:
 
 HEADER_BG_COLOR = colors.HexColor("#001E64")
 HEADER_TEXT_COLOR = colors.white
-ROW_ALT_COLOR = colors.HexColor("#F7F9FF")
-BORDER_COLOR = colors.HexColor("#CBD8F7")
+ROW_ALT_COLOR = colors.HexColor("#FBFCFF")
+BORDER_COLOR = colors.HexColor("#EBF1FF")
 TEXT_COLOR = colors.HexColor("#001E64")
 
 
@@ -64,7 +68,11 @@ TEXT_COLOR = colors.HexColor("#001E64")
 # =========================================================================
 
 def get_hana_connection():
-    """Tworzy i zwraca połączenie z SAP HANA."""
+    """Tworzy i zwraca połączenie z SAP HANA (lub mock)."""
+    if USE_MOCK:
+        from mock_hana import mock_dbapi
+        return mock_dbapi.connect()
+
     from hdbcli import dbapi
 
     connection = dbapi.connect(
@@ -184,6 +192,17 @@ def calculate_column_sum(data: List[List[str]], col_index: int) -> str:
     return str(total) if has_numbers else ''
 
 
+def calculate_column_max(data: List[List[str]], col_index: int) -> str:
+    """Oblicza MAX wartości w kolumnie (dla procentów)."""
+    max_val = None
+    for row in data:
+        if col_index < len(row) and is_numeric(row[col_index]):
+            val = float(str(row[col_index]).replace(',', '.').replace(' ', ''))
+            if max_val is None or val > max_val:
+                max_val = val
+    return str(max_val) if max_val is not None else ''
+
+
 # =========================================================================
 #  STYLE TABEL
 # =========================================================================
@@ -194,64 +213,75 @@ def get_summary_table_style() -> TableStyle:
         ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG_COLOR),
         ('TEXTCOLOR', (0, 0), (-1, 0), HEADER_TEXT_COLOR),
         ('FONTNAME', (0, 0), (-1, 0), FONT_BOLD),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('FONTSIZE', (0, 0), (-1, 0), 7),
         ('ALIGN', (0, 0), (-1, 0), 'LEFT'),
         ('SPAN', (0, 0), (-1, 0)),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, ROW_ALT_COLOR]),
         ('TEXTCOLOR', (0, 1), (0, -1), TEXT_COLOR),
         ('FONTNAME', (0, 1), (0, -1), FONT_BOLD),
-        ('FONTSIZE', (0, 1), (0, -1), 7),
+        ('FONTSIZE', (0, 1), (0, -1), 6),
         ('ALIGN', (0, 1), (0, -1), 'LEFT'),
         ('TEXTCOLOR', (1, 1), (1, -1), TEXT_COLOR),
         ('FONTNAME', (1, 1), (1, -1), FONT_REGULAR),
-        ('FONTSIZE', (1, 1), (1, -1), 7),
+        ('FONTSIZE', (1, 1), (1, -1), 6),
         ('ALIGN', (1, 1), (1, -1), 'LEFT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
         ('LINEBELOW', (0, 0), (-1, 0), 0.5, BORDER_COLOR),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
     ])
 
 
-def get_large_table_style(has_total_row: bool = False) -> TableStyle:
-    """Styl dla dużych tabel danych."""
+def get_large_table_style(has_total_row: bool = False, num_cols: int = 5) -> TableStyle:
+    """Styl dla dużych tabel danych – dynamiczny rozmiar czcionki."""
+    # Mniej kolumn → większa czcionka; 11 kolumn → mniejsza
+    if num_cols <= 5:
+        title_fs, header_fs, data_fs = 8, 7, 6.5
+    elif num_cols <= 8:
+        title_fs, header_fs, data_fs = 7, 6.5, 6
+    else:
+        title_fs, header_fs, data_fs = 6.5, 5.5, 5.5
+
+    pad = 2 if num_cols > 8 else 3
+
     cmds = [
         ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG_COLOR),
         ('TEXTCOLOR', (0, 0), (-1, 0), HEADER_TEXT_COLOR),
         ('FONTNAME', (0, 0), (-1, 0), FONT_BOLD),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('FONTSIZE', (0, 0), (-1, 0), title_fs),
         ('ALIGN', (0, 0), (-1, 0), 'LEFT'),
         ('SPAN', (0, 0), (-1, 0)),
-        ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor("#E8ECF4")),
+        ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor("#F7F9FF")),
         ('TEXTCOLOR', (0, 1), (-1, 1), TEXT_COLOR),
         ('FONTNAME', (0, 1), (-1, 1), FONT_BOLD),
-        ('FONTSIZE', (0, 1), (-1, 1), 8),
+        ('FONTSIZE', (0, 1), (-1, 1), header_fs),
         ('ALIGN', (0, 1), (-1, 1), 'CENTER'),
         ('TEXTCOLOR', (0, 2), (-1, -2 if has_total_row else -1), TEXT_COLOR),
         ('FONTNAME', (0, 2), (-1, -2 if has_total_row else -1), FONT_REGULAR),
-        ('FONTSIZE', (0, 2), (-1, -2 if has_total_row else -1), 8),
+        ('FONTSIZE', (0, 2), (-1, -2 if has_total_row else -1), data_fs),
         ('ALIGN', (0, 2), (-1, -2 if has_total_row else -1), 'RIGHT'),
+        ('ALIGN', (0, 2), (0, -2 if has_total_row else -1), 'LEFT'),
         ('ROWBACKGROUNDS', (0, 2), (-1, -2 if has_total_row else -1),
          [colors.white, ROW_ALT_COLOR]),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), pad),
+        ('RIGHTPADDING', (0, 0), (-1, -1), pad),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
     ]
     if has_total_row:
         cmds.extend([
             ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#E8ECF4")),
             ('TEXTCOLOR', (0, -1), (-1, -1), TEXT_COLOR),
             ('FONTNAME', (0, -1), (-1, -1), FONT_BOLD),
-            ('FONTSIZE', (0, -1), (-1, -1), 8),
+            ('FONTSIZE', (0, -1), (-1, -1), data_fs),
             ('ALIGN', (0, -1), (0, -1), 'LEFT'),
             ('ALIGN', (1, -1), (-1, -1), 'RIGHT'),
-            ('LINEABOVE', (0, -1), (-1, -1), 1.5, BORDER_COLOR),
+            ('LINEABOVE', (0, -1), (-1, -1), 1, BORDER_COLOR),
         ])
     return TableStyle(cmds)
 
@@ -262,21 +292,29 @@ def get_large_table_style(has_total_row: bool = False) -> TableStyle:
 
 def create_summary_table(title: str, summary_data: List[List[str]]) -> Table:
     """Tworzy pionową tabelę podsumowania (tytuł + pary etykieta/wartość)."""
+    label_style = ParagraphStyle(
+        'SummaryLabel', fontName=FONT_BOLD, fontSize=6,
+        textColor=TEXT_COLOR, leading=8,
+    )
     cell_style = ParagraphStyle(
-        'SummaryCell', fontName=FONT_REGULAR, fontSize=7,
-        textColor=TEXT_COLOR, leading=9,
+        'SummaryCell', fontName=FONT_REGULAR, fontSize=6,
+        textColor=TEXT_COLOR, leading=8,
     )
     table_data = [[title, '']]
     for row in summary_data:
         label = row[0] if len(row) > 0 else ''
         value = row[1] if len(row) > 1 else ''
-        table_data.append([label, Paragraph(str(value), cell_style)])
+        table_data.append([
+            Paragraph(str(label), label_style),
+            Paragraph(str(value), cell_style),
+        ])
 
     while len(table_data) < 9:
         table_data.append(['', ''])
 
-    col_widths = [3.5 * cm, 5.0 * cm]
-    row_heights = [0.6 * cm] + [0.5 * cm] * (len(table_data) - 2) + [None]
+    col_widths = [2.8 * cm, 5.0 * cm]
+    # Auto row heights
+    row_heights = [0.45 * cm] + [None] * (len(table_data) - 1)
     table = Table(table_data, colWidths=col_widths, rowHeights=row_heights)
     table.setStyle(get_summary_table_style())
     return table
@@ -285,12 +323,12 @@ def create_summary_table(title: str, summary_data: List[List[str]]) -> Table:
 def create_report_header(client_name: str) -> List:
     """Tworzy nagłówek raportu: tytuł + data."""
     title_style = ParagraphStyle(
-        'ReportTitle', fontName=FONT_BOLD, fontSize=24,
-        textColor=TEXT_COLOR, spaceAfter=4, leading=30,
+        'ReportTitle', fontName=FONT_BOLD, fontSize=18,
+        textColor=TEXT_COLOR, spaceAfter=2, leading=22,
     )
     date_style = ParagraphStyle(
-        'ReportDate', fontName=FONT_REGULAR, fontSize=10,
-        textColor=colors.HexColor("#666666"), spaceAfter=6,
+        'ReportDate', fontName=FONT_REGULAR, fontSize=8,
+        textColor=colors.HexColor("#666666"), spaceAfter=4,
     )
     return [
         Paragraph("Twój raport", title_style),
@@ -298,56 +336,152 @@ def create_report_header(client_name: str) -> List:
     ]
 
 
+def _compute_col_widths(num_cols: int, headers: List[str],
+                        currency_columns: List[int],
+                        percentage_columns: List[int]) -> List[float]:
+    """Inteligentnie rozkłada szerokości kolumn wg typu danych."""
+    available = A4[0] - 2 * cm  # ~19.5 cm
+
+    if num_cols <= 5:
+        return [available / num_cols] * num_cols
+
+    # Wagi: tekst=3, waluta=2, procent=1.2, reszta=1.5
+    weights = []
+    for i in range(num_cols):
+        h = headers[i].lower() if i < len(headers) else ''
+        if i in currency_columns:
+            weights.append(2.0)
+        elif i in percentage_columns:
+            weights.append(1.2)
+        elif any(k in h for k in ['nazwa', 'name', 'klasyfikacja', 'typ']):
+            weights.append(3.0)
+        elif any(k in h for k in ['grupa', 'lok']):
+            weights.append(1.8)
+        else:
+            weights.append(1.5)
+
+    total_w = sum(weights)
+    return [available * w / total_w for w in weights]
+
+
+def _wrap_cell(value: str, style: ParagraphStyle) -> Paragraph:
+    """Opakowuje wartość w Paragraph – zapewnia zawijanie tekstu."""
+    return Paragraph(str(value), style)
+
+
 def create_large_table(title: str, headers: List[str], data: List[List[str]],
                        col_widths: List[float] = None,
                        add_total_row: bool = True,
                        currency_columns: List[int] = None,
-                       percentage_columns: List[int] = None) -> Table:
-    """Tworzy dużą tabelę danych z opcjonalnym wierszem sumy."""
+                       percentage_columns: List[int] = None,
+                       subtitle: str = None) -> Table:
+    """Tworzy dużą tabelę danych z zawijaniem tekstu i auto-wysokością."""
     num_cols = len(headers)
     currency_columns = currency_columns or []
     percentage_columns = percentage_columns or []
 
     if col_widths is None:
-        available = A4[0] - 2 * cm
-        col_widths = [available / num_cols] * num_cols
+        col_widths = _compute_col_widths(
+            num_cols, headers, currency_columns, percentage_columns
+        )
 
-    table_data = [[title] + [''] * (num_cols - 1)]
-    table_data.append(headers)
+    # --- Style Paragraph dla komórek ---
+    if num_cols <= 5:
+        hdr_fs, data_fs = 7, 6.5
+    elif num_cols <= 8:
+        hdr_fs, data_fs = 6.5, 6
+    else:
+        hdr_fs, data_fs = 5.5, 5.5
 
+    header_para_style = ParagraphStyle(
+        'TblHeader', fontName=FONT_BOLD, fontSize=hdr_fs,
+        textColor=TEXT_COLOR, leading=hdr_fs + 2,
+        alignment=1,  # CENTER
+    )
+    data_para_style = ParagraphStyle(
+        'TblData', fontName=FONT_REGULAR, fontSize=data_fs,
+        textColor=TEXT_COLOR, leading=data_fs + 2,
+        alignment=2,  # RIGHT
+    )
+    data_left_style = ParagraphStyle(
+        'TblDataLeft', fontName=FONT_REGULAR, fontSize=data_fs,
+        textColor=TEXT_COLOR, leading=data_fs + 2,
+        alignment=0,  # LEFT
+    )
+    total_para_style = ParagraphStyle(
+        'TblTotal', fontName=FONT_BOLD, fontSize=data_fs,
+        textColor=TEXT_COLOR, leading=data_fs + 2,
+        alignment=2,  # RIGHT
+    )
+
+    # Kolumny tekstowe (wyrównanie do lewej)
+    text_cols = set()
+    for i in range(num_cols):
+        if i not in currency_columns and i not in percentage_columns:
+            text_cols.add(i)
+
+    # --- Wiersz tytułowy ---
+    display_title = f"{title} – {subtitle}" if subtitle else title
+    table_data = [[display_title] + [''] * (num_cols - 1)]
+
+    # --- Nagłówki (zawinięte w Paragraph) ---
+    table_data.append([
+        _wrap_cell(h, header_para_style) for h in headers
+    ])
+
+    # --- Dane ---
     for row in data:
         padded = (row + [''] * num_cols)[:num_cols]
         formatted = []
         for i, val in enumerate(padded):
             if i in currency_columns and is_numeric(val):
-                formatted.append(format_as_currency(val))
+                txt = format_as_currency(val)
+                formatted.append(_wrap_cell(txt, data_para_style))
             elif i in percentage_columns and is_numeric(val):
-                formatted.append(format_as_percentage(val))
+                txt = format_as_percentage(val)
+                formatted.append(_wrap_cell(txt, data_para_style))
+            elif i in text_cols:
+                formatted.append(_wrap_cell(str(val), data_left_style))
             else:
-                formatted.append(val)
+                formatted.append(_wrap_cell(str(val), data_para_style))
         table_data.append(formatted)
 
+    # --- Wiersz SUMA ---
     if add_total_row and data:
-        total = ['SUMA']
+        total = [_wrap_cell('SUMA', ParagraphStyle(
+            'TblTotalLabel', fontName=FONT_BOLD, fontSize=data_fs,
+            textColor=colors.white, leading=data_fs + 2, alignment=0,
+        ))]
         for ci in range(1, num_cols):
-            s = calculate_column_sum(data, ci)
-            if s and ci in currency_columns:
-                total.append(format_as_currency(s))
-            elif s and ci in percentage_columns:
-                total.append(format_as_percentage(s))
-            elif s:
-                total.append(s)
+            if ci in percentage_columns:
+                s = calculate_column_max(data, ci)
+                if s:
+                    total.append(_wrap_cell(format_as_percentage(s), total_para_style))
+                else:
+                    total.append('')
             else:
-                total.append('')
+                s = calculate_column_sum(data, ci)
+                if s and ci in currency_columns:
+                    total.append(_wrap_cell(format_as_currency(s), total_para_style))
+                elif s:
+                    total.append(_wrap_cell(s, total_para_style))
+                else:
+                    total.append('')
         table_data.append(total)
 
     if not data:
         for _ in range(3):
             table_data.append([''] * num_cols)
 
-    row_heights = [0.7 * cm] * len(table_data)
+    # Auto row heights (None = oblicz automatycznie na podstawie zawartości)
+    title_h = 0.55 * cm
+    row_heights = [title_h] + [None] * (len(table_data) - 1)
+
     table = Table(table_data, colWidths=col_widths, rowHeights=row_heights)
-    table.setStyle(get_large_table_style(has_total_row=add_total_row and bool(data)))
+    table.setStyle(get_large_table_style(
+        has_total_row=add_total_row and bool(data),
+        num_cols=num_cols,
+    ))
     return table
 
 
@@ -420,7 +554,7 @@ def generate_pdf(client_name: str, summary_title: str,
     )
 
     elements = create_top_section(client_name, summary_title, summary_data)
-    elements.append(Spacer(1, 0.8 * cm))
+    elements.append(Spacer(1, 0.4 * cm))
 
     for i, t in enumerate(tables):
         table = create_large_table(
@@ -431,10 +565,11 @@ def generate_pdf(client_name: str, summary_title: str,
             add_total_row=t.get('add_total_row', True),
             currency_columns=t.get('currency_columns', []),
             percentage_columns=t.get('percentage_columns', []),
+            subtitle=t.get('subtitle', ''),
         )
         elements.append(table)
         if i < len(tables) - 1:
-            elements.append(Spacer(1, 0.5 * cm))
+            elements.append(Spacer(1, 0.3 * cm))
 
     doc.build(elements)
     print(f"✓ PDF: {output_path} ({len(tables)} tabel)")
@@ -447,23 +582,38 @@ def generate_pdf(client_name: str, summary_title: str,
 
 if __name__ == "__main__":
     from report_factory import ReportFactory
+    from report_types import ReportType
 
     print("=" * 60)
     print("  GENERATOR RAPORTÓW PDF")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  Tryb: {'MOCK' if USE_MOCK else 'SAP HANA'}")
     print("=" * 60)
+
+    # Na razie skupiamy się na 2 szablonach wykonania:
+    ACTIVE_TYPES = [
+        ReportType.WYKONANIE_A_TYP_A_TYDZIEN,  # per umowa (wszystkie sklepy)
+        ReportType.WYKONANIE_A_TYP_B_TYDZIEN,  # per lokalizacja (wybrany sklep)
+    ]
 
     with Timer("Generowanie raportów") as total:
         try:
             factory = ReportFactory(config_dir="config")
-            numery = factory.get_clients_list()
-            print(f"\n📋 Numery klientów: {numery}")
+
+            # Pobierz listę umów
+            contracts = factory.get_contracts_list()
+            print(f"\n📋 Umowy ({len(contracts)}):")
+            for c in contracts:
+                print(f"   {c['nr_umowy']}  {c['klient']}  [{c['podtyp_klient']}]")
 
             all_generated = []
-            for nr in numery:
+            for c in contracts:
+                nr = c['nr_umowy']
                 print(f"\n{'─' * 50}")
-                print(f"NR: {nr}")
-                generated = factory.generate_all_for_nr(nr)
+                print(f"UMOWA: {nr}  |  {c['klient']}")
+                generated = factory.generate_all_for_nr(
+                    nr, report_types=ACTIVE_TYPES
+                )
                 all_generated.extend(generated)
 
             print(f"\n{'─' * 50}")

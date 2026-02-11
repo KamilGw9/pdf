@@ -54,15 +54,17 @@ class ReportFactory:
     #  POBIERANIE DANYCH Z HANA
     # ------------------------------------------------------------------
 
-    def _execute_query(self, query: str, nr: int) -> List[List[str]]:
+    def _execute_query(self, query: str, nr: str, lokalizacja: str = None) -> List[List[str]]:
         """
         Wykonuje CALL schema.procedura(nr) i zwraca result set.
-        Parametr {nr} w zapytaniu zostanie podstawiony wartością.
+        Parametr {nr} i {lok} w zapytaniu zostanie podstawiony wartością.
         """
         connection = get_hana_connection()
         cursor = connection.cursor()
         try:
             resolved_query = query.replace('{nr}', str(nr)).strip()
+            if lokalizacja:
+                resolved_query = resolved_query.replace('{lok}', str(lokalizacja))
             print(f"    SQL: {resolved_query}")
             cursor.execute(resolved_query)
 
@@ -78,7 +80,7 @@ class ReportFactory:
             cursor.close()
             connection.close()
 
-    def _fetch_summary(self, config: dict, nr: int) -> List[List[str]]:
+    def _fetch_summary(self, config: dict, nr: str) -> List[List[str]]:
         """Pobiera dane podsumowania (pary etykieta/wartość)."""
         query = config['summary']['query']
         labels = config['summary']['labels']
@@ -94,26 +96,61 @@ class ReportFactory:
             for i, label in enumerate(labels)
         ]
 
-    def _fetch_table_data(self, table_cfg: dict, nr: int) -> List[List[str]]:
+    def _fetch_table_data(self, table_cfg: dict, nr: str,
+                          lokalizacja: str = None) -> List[List[str]]:
         """Pobiera dane dla pojedynczej tabeli."""
-        return self._execute_query(table_cfg['query'], nr)
+        return self._execute_query(table_cfg['query'], nr, lokalizacja)
 
     # ------------------------------------------------------------------
-    #  POBIERANIE LISTY KLIENTÓW / NUMERÓW
+    #  POBIERANIE LISTY UMÓW / KLIENTÓW
     # ------------------------------------------------------------------
 
-    def get_clients_list(self) -> List[int]:
+    def get_contracts_list(self) -> List[Dict[str, Any]]:
         """
-        Pobiera listę unikalnych numerów klientów z HANA.
-        UZUPEŁNIJ: zapytanie lub procedurę zwracającą listę NR.
+        Pobiera listę unikalnych umów z HANA.
+        SELECT DISTINCT nr_umowy, klient, podtyp_klient FROM xx.xxd
+        Zwraca listę słowników: [{'nr_umowy': ..., 'klient': ..., 'podtyp_klient': ...}, ...]
         """
         connection = get_hana_connection()
         cursor = connection.cursor()
         try:
-            # UZUPEŁNIJ: np. CALL SCHEMA.PROC_LISTA_KLIENTOW()
-            cursor.execute("CALL SCHEMA.PROC_LISTA_KLIENTOW()")
+            cursor.execute(
+                "SELECT DISTINCT nr_umowy, klient, podtyp_klient FROM xx.xxd"
+            )
             rows = cursor.fetchall()
-            return [int(row[0]) for row in rows if row]
+            contracts = []
+            for row in rows:
+                if row and len(row) >= 3:
+                    contracts.append({
+                        'nr_umowy': str(row[0]),
+                        'klient': str(row[1]),
+                        'podtyp_klient': str(row[2]),
+                    })
+            return contracts
+        finally:
+            cursor.close()
+            connection.close()
+
+    def get_clients_list(self) -> List[str]:
+        """
+        Zwraca listę unikalnych nr_umowy (kompatybilność wsteczna).
+        """
+        contracts = self.get_contracts_list()
+        return [c['nr_umowy'] for c in contracts]
+
+    def get_locations_for_contract(self, nr_umowy: str) -> List[str]:
+        """
+        Pobiera listę lokalizacji (sklepów) dla danej umowy.
+        Używane przy Typ B – raport per lokalizacja.
+        """
+        connection = get_hana_connection()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                f"CALL SCHEMA.PROC_SKLEPY_WYKONANIE_A_X({nr_umowy})"
+            )
+            rows = cursor.fetchall()
+            return list(set(str(row[0]) for row in rows if row))
         finally:
             cursor.close()
             connection.close()
@@ -122,13 +159,15 @@ class ReportFactory:
     #  GENEROWANIE RAPORTÓW
     # ------------------------------------------------------------------
 
-    def generate_report(self, report_type: ReportType, nr: int) -> str:
+    def generate_report(self, report_type: ReportType, nr: str,
+                        lokalizacja: str = None) -> str:
         """
-        Generuje pojedynczy raport PDF dla danego numeru.
+        Generuje pojedynczy raport PDF dla danego numeru umowy.
 
         Args:
             report_type: Typ raportu (enum)
-            nr: Numer klienta (parametr do CALL procedura)
+            nr: Numer umowy (parametr do CALL procedura)
+            lokalizacja: Nazwa lokalizacji (tylko dla Typ B)
 
         Returns:
             Ścieżka do wygenerowanego PDF
@@ -150,10 +189,11 @@ class ReportFactory:
         tables = []
         for table_cfg in config['data_tables']:
             with Timer(f"  {table_cfg['title']}"):
-                data = self._fetch_table_data(table_cfg, nr)
+                data = self._fetch_table_data(table_cfg, nr, lokalizacja)
                 fmt = table_cfg.get('formatting', {})
                 tables.append({
                     'title': table_cfg['title'],
+                    'subtitle': table_cfg.get('subtitle', ''),
                     'headers': table_cfg['headers'],
                     'data': data,
                     'currency_columns': fmt.get('currency_columns', []),
@@ -163,7 +203,12 @@ class ReportFactory:
                 })
 
         # Generuj PDF — każdy NR = osobny plik
-        filename = f"{report_type.value}_{nr}.pdf"
+        safe_nr = str(nr).replace('/', '_').replace('\\', '_')
+        if lokalizacja:
+            safe_lok = lokalizacja.replace(' ', '_').replace('/', '_')
+            filename = f"{report_type.value}_{safe_nr}_{safe_lok}.pdf"
+        else:
+            filename = f"{report_type.value}_{safe_nr}.pdf"
         subfolder = report_type.value.replace('_', '#')
 
         with Timer(f"  PDF ({len(tables)} tabel)"):
@@ -178,13 +223,16 @@ class ReportFactory:
 
         return pdf_path
 
-    def generate_all_for_nr(self, nr: int,
+    def generate_all_for_nr(self, nr: str,
                             report_types: List[ReportType] = None) -> List[str]:
         """
-        Generuje wybrane (lub wszystkie) typy raportów dla numeru.
+        Generuje wybrane (lub wszystkie) typy raportów dla numeru umowy.
+
+        Typ A = generuje dla każdej umowy (wszystkie sklepy)
+        Typ B = generuje dla każdej lokalizacji osobno
 
         Args:
-            nr: Numer klienta
+            nr: Numer umowy
             report_types: Lista typów (None = wszystkie skonfigurowane)
 
         Returns:
@@ -198,8 +246,21 @@ class ReportFactory:
                 print(f"  ⚠️  Pomijam {rt.value} - brak konfiguracji")
                 continue
             try:
-                path = self.generate_report(rt, nr)
-                generated.append(path)
+                # Typ B – generuj per lokalizacja
+                if rt in (ReportType.WYKONANIE_A_TYP_B_TYDZIEN,
+                          ReportType.WYKONANIE_B_TYP_B_TYDZIEN):
+                    locations = self.get_locations_for_contract(nr)
+                    print(f"  📍 Lokalizacje ({len(locations)}): {locations}")
+                    for lok in locations:
+                        try:
+                            path = self.generate_report(rt, nr, lokalizacja=lok)
+                            generated.append(path)
+                        except Exception as e:
+                            print(f"  ✗ {rt.value} lok={lok}: {e}")
+                else:
+                    # Typ A – jeden raport per umowa
+                    path = self.generate_report(rt, nr)
+                    generated.append(path)
             except Exception as e:
                 print(f"  ✗ {rt.value}: {e}")
 

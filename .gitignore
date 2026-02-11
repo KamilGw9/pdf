@@ -39,3 +39,5 @@ generation_log.json
 *.tmp
 *.bak
 .env
+
+*.png
