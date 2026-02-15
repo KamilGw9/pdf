@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Generator raportów PDF z danymi z SAP HANA.
 Układ: Nagłówek + Podsumowanie (góra) + N dynamicznych tabel (dół).
@@ -6,11 +6,11 @@ Konfiguracja tabel w plikach YAML (folder config/).
 """
 
 import os
-import json
+import csv
 import time
 from datetime import datetime
 from typing import List, Dict, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from reportlab.platypus import KeepTogether
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -29,16 +29,16 @@ from reportlab.lib.styles import ParagraphStyle
 
 # Przełącznik: True = dane mockowe, False = prawdziwa baza SAP HANA
 # Aby przełączyć na produkcję: ustaw USE_MOCK = False i uzupełnij HANA_CONFIG
-USE_MOCK = True
+USE_MOCK = False
 
 HANA_CONFIG = {
-    'address': '',       # UZUPEŁNIJ: np. 'hana-server.company.com'
-    'port': 30015,       # UZUPEŁNIJ: np. 30015
-    'user': '',          # UZUPEŁNIJ
-    'password': '',      # UZUPEŁNIJ
-    'schema': '',        # UZUPEŁNIJ: np. 'MY_SCHEMA'
-    'encrypt': True,
-    'sslValidateCertificate': False,
+    'address': 'addres',       # UZUPEŁNIJ: np. 'hana-server.company.com'
+    'port': port,       # UZUPEŁNIJ: np. 30015
+    'user': 'user',          # UZUPEŁNIJ
+    'password': 'Password',      # UZUPEŁNIJ
+    #'schema': '',        # UZUPEŁNIJ: np. 'MY_SCHEMA'
+    #'encrypt': True,
+    #'sslValidateCertificate': False,
 }
 
 BASE_OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -81,15 +81,15 @@ def get_hana_connection():
         port=HANA_CONFIG['port'],
         user=HANA_CONFIG['user'],
         password=HANA_CONFIG['password'],
-        encrypt=HANA_CONFIG.get('encrypt', True),
-        sslValidateCertificate=HANA_CONFIG.get('sslValidateCertificate', False),
+        #encrypt=HANA_CONFIG.get('encrypt', True),
+        #sslValidateCertificate=HANA_CONFIG.get('sslValidateCertificate', False),
     )
 
-    schema = HANA_CONFIG.get('schema', '')
-    if schema:
-        cursor = connection.cursor()
-        cursor.execute(f'SET SCHEMA "{schema}"')
-        cursor.close()
+    # schema = HANA_CONFIG.get('schema', '')
+    # if schema:
+    cursor = connection.cursor()
+    #cursor.execute(f'SET SCHEMA "{schema}"')
+    cursor.close()
 
     return connection
 
@@ -135,20 +135,6 @@ def get_output_folder(subfolder: str = None) -> str:
 def get_output_path(filename: str, subfolder: str = None) -> str:
     """Pełna ścieżka do pliku w folderze wyjściowym."""
     return os.path.join(get_output_folder(subfolder), filename)
-
-
-def save_generation_log(results: List[Dict[str, Any]], output_dir: str) -> str:
-    """Zapisuje log generowania do JSON."""
-    log_data = {
-        'timestamp': datetime.now().isoformat(),
-        'output_directory': output_dir,
-        'total_reports': len(results),
-        'reports': results,
-    }
-    log_path = os.path.join(output_dir, 'generation_log.json')
-    with open(log_path, 'w', encoding='utf-8') as f:
-        json.dump(log_data, f, indent=2, ensure_ascii=False)
-    return log_path
 
 
 # =========================================================================
@@ -214,13 +200,13 @@ def get_summary_table_style() -> TableStyle:
         ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG_COLOR),
         ('TEXTCOLOR', (0, 0), (-1, 0), HEADER_TEXT_COLOR),
         ('FONTNAME', (0, 0), (-1, 0), FONT_BOLD),
-        ('FONTSIZE', (0, 0), (-1, 0), 7),
+        ('FONTSIZE', (0, 0), (-1, 0), 6.5),
         ('ALIGN', (0, 0), (-1, 0), 'LEFT'),
         ('SPAN', (0, 0), (-1, 0)),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, ROW_ALT_COLOR]),
         ('TEXTCOLOR', (0, 1), (0, -1), TEXT_COLOR),
         ('FONTNAME', (0, 1), (0, -1), FONT_BOLD),
-        ('FONTSIZE', (0, 1), (0, -1), 6),
+        ('FONTSIZE', (0, 1), (0, -1), 5.5),
         ('ALIGN', (0, 1), (0, -1), 'LEFT'),
         ('TEXTCOLOR', (1, 1), (1, -1), TEXT_COLOR),
         ('FONTNAME', (1, 1), (1, -1), FONT_REGULAR),
@@ -239,13 +225,13 @@ def get_summary_table_style() -> TableStyle:
 def get_large_table_style(has_total_row: bool = False, num_cols: int = 5) -> TableStyle:
     """Styl dla dużych tabel danych – dynamiczny rozmiar czcionki."""
     # Mniej kolumn → większa czcionka; 11 kolumn → mniejsza
-    if num_cols <= 5:
-        title_fs, header_fs, data_fs = 8, 7, 6.5
-    elif num_cols <= 8:
-        title_fs, header_fs, data_fs = 7, 6.5, 6
-    else:
-        title_fs, header_fs, data_fs = 6.5, 5.5, 5.5
-
+    # if num_cols <= 5:
+    #     title_fs, header_fs, data_fs = 8, 7, 6.5
+    # elif num_cols <= 8:
+    #     title_fs, header_fs, data_fs = 7, 6.5, 6
+    # else:
+    #     title_fs, header_fs, data_fs = 6.5, 5.5, 5.5
+    title_fs, header_fs, data_fs = 7, 5.5, 5.5
     pad = 2 if num_cols > 8 else 3
 
     cmds = [
@@ -276,13 +262,13 @@ def get_large_table_style(has_total_row: bool = False, num_cols: int = 5) -> Tab
     ]
     if has_total_row:
         cmds.extend([
-            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#E8ECF4")),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#E3E7ED")),
             ('TEXTCOLOR', (0, -1), (-1, -1), TEXT_COLOR),
             ('FONTNAME', (0, -1), (-1, -1), FONT_BOLD),
             ('FONTSIZE', (0, -1), (-1, -1), data_fs),
             ('ALIGN', (0, -1), (0, -1), 'LEFT'),
             ('ALIGN', (1, -1), (-1, -1), 'RIGHT'),
-            ('LINEABOVE', (0, -1), (-1, -1), 1, BORDER_COLOR),
+            ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor("#001E64")),
         ])
     return TableStyle(cmds)
 
@@ -328,17 +314,18 @@ def create_report_header(client_name: str) -> List:
         textColor=TEXT_COLOR, spaceAfter=2, leading=22,
     )
     date_style = ParagraphStyle(
-        'ReportDate', fontName=FONT_REGULAR, fontSize=8,
+        'ReportDate', fontName=FONT_REGULAR, fontSize=6,
         textColor=colors.HexColor("#666666"), spaceAfter=4,
     )
     return [
-        Paragraph("Twój raport", title_style),
+        Paragraph("Twoje bonusy", title_style),
         Paragraph(f"Data wygenerowania: {datetime.now().strftime('%d.%m.%Y')}", date_style),
     ]
 
 
 def _compute_col_widths(num_cols: int, headers: List[str],
                         currency_columns: List[int],
+                        currency_columns_2: List[int],
                         percentage_columns: List[int]) -> List[float]:
     """Inteligentnie rozkłada szerokości kolumn wg typu danych."""
     available = A4[0] - 2 * cm  # ~19.5 cm
@@ -352,11 +339,21 @@ def _compute_col_widths(num_cols: int, headers: List[str],
         h = headers[i].lower() if i < len(headers) else ''
         if i in currency_columns:
             weights.append(2.0)
+        elif i in currency_columns_2:
+            weights.append(2.0)
         elif i in percentage_columns:
-            weights.append(1.2)
-        elif any(k in h for k in ['nazwa', 'name', 'klasyfikacja', 'typ']):
+            weights.append(1.7)
+        elif any(k in h for k in ['nazwa']):
             weights.append(3.0)
-        elif any(k in h for k in ['grupa', 'lok']):
+        elif any(k in h for k in ['                          ']):
+
+            weights.append(2.0)
+        elif any(k in h for k in ['                 ']):
+            
+            weights.append(1.7)
+        elif  any(k in h for k in ['klasyfikacja', 'typ']):
+            weights.append(2.0)
+        elif any(k in h for k in ['grupa']):
             weights.append(1.8)
         else:
             weights.append(1.5)
@@ -369,32 +366,30 @@ def _wrap_cell(value: str, style: ParagraphStyle) -> Paragraph:
     """Opakowuje wartość w Paragraph – zapewnia zawijanie tekstu."""
     return Paragraph(str(value), style)
 
-
 def _wrap_header(value: str, style: ParagraphStyle) -> Paragraph:
-    """
-    Opakowuje nagłówek w Paragraph z ochroną przed dzieleniem słów.
-    Każde słowo jest w <nobr> – nie zostanie rozerwane w środku.
-    Łamanie wiersza następuje TYLKO między pełnymi wyrazami.
-    """
+
     words = str(value).split(' ')
-    safe = '&nbsp;'.join(f'<nobr>{w}</nobr>' for w in words)
+    safe = ' '.join(f'<nobr>{w}</nobr>' for w in words)
     return Paragraph(safe, style)
+
 
 
 def create_large_table(title: str, headers: List[str], data: List[List[str]],
                        col_widths: List[float] = None,
                        add_total_row: bool = True,
                        currency_columns: List[int] = None,
+                       currency_columns_2: List[int] = None,
                        percentage_columns: List[int] = None,
                        subtitle: str = None) -> Table:
     """Tworzy dużą tabelę danych z zawijaniem tekstu i auto-wysokością."""
     num_cols = len(headers)
     currency_columns = currency_columns or []
     percentage_columns = percentage_columns or []
+    currency_columns_2 = currency_columns_2 or []
 
     if col_widths is None:
         col_widths = _compute_col_widths(
-            num_cols, headers, currency_columns, percentage_columns
+            num_cols, headers, currency_columns, percentage_columns,currency_columns_2
         )
 
     # --- Style Paragraph dla komórek ---
@@ -429,15 +424,16 @@ def create_large_table(title: str, headers: List[str], data: List[List[str]],
     # Kolumny tekstowe (wyrównanie do lewej)
     text_cols = set()
     for i in range(num_cols):
-        if i not in currency_columns and i not in percentage_columns:
+        if i not in currency_columns and i not in percentage_columns and i not in currency_columns_2:
             text_cols.add(i)
 
     # --- Wiersz tytułowy ---
     display_title = f"{title} – {subtitle}" if subtitle else title
     table_data = [[display_title] + [''] * (num_cols - 1)]
 
-    # --- Nagłówki (zawinięte w Paragraph, bez dzielenia słów) ---
+    # --- Nagłówki (zawinięte w Paragraph) ---
     table_data.append([
+        #_wrap_cell(h, header_para_style) for h in headers
         _wrap_header(h, header_para_style) for h in headers
     ])
 
@@ -447,6 +443,9 @@ def create_large_table(title: str, headers: List[str], data: List[List[str]],
         formatted = []
         for i, val in enumerate(padded):
             if i in currency_columns and is_numeric(val):
+                txt = format_as_currency(val)
+                formatted.append(_wrap_cell(txt, data_para_style))
+            elif i in currency_columns_2 and is_numeric(val):
                 txt = format_as_currency(val)
                 formatted.append(_wrap_cell(txt, data_para_style))
             elif i in percentage_columns and is_numeric(val):
@@ -462,10 +461,12 @@ def create_large_table(title: str, headers: List[str], data: List[List[str]],
     if add_total_row and data:
         total = [_wrap_cell('SUMA', ParagraphStyle(
             'TblTotalLabel', fontName=FONT_BOLD, fontSize=data_fs,
-            textColor=colors.white, leading=data_fs + 2, alignment=0,
+            textColor=TEXT_COLOR, leading=data_fs + 2, alignment=0,
         ))]
         for ci in range(1, num_cols):
-            if ci in percentage_columns:
+            if ci in currency_columns_2:
+                total.append('')
+            elif ci in percentage_columns:
                 s = calculate_column_max(data, ci)
                 if s:
                     total.append(_wrap_cell(format_as_percentage(s), total_para_style))
@@ -500,6 +501,59 @@ def create_large_table(title: str, headers: List[str], data: List[List[str]],
 # =========================================================================
 #  GÓRNA SEKCJA
 # =========================================================================
+
+# =========================================================================
+#  LOGO
+# =========================================================================
+
+
+def add_logo_to_elements(elements: List, logo_path: str = "logo.png") -> List:
+    """
+    Dodaje logo na początku dokumentu z pełną szerokością strony.
+    
+    Args:
+        elements: Lista elementów dokumentu
+        logo_path: Ścieżka do pliku logo
+    
+    Returns:
+        Lista elementów z logo na początku
+    """
+    try:
+        from reportlab.platypus import Image
+        from PIL import Image as PILImage
+        
+        # Sprawdź czy plik istnieje
+        if not os.path.exists(logo_path):
+            print(f"⚠️  Logo nie znalezione: {logo_path}")
+            return elements
+        
+        # Pobierz rzeczywiste wymiary logo
+        img = PILImage.open(logo_path)
+        img_width, img_height = img.size
+        
+        # Oblicz proporcje
+        aspect_ratio = img_height / img_width
+        
+        # Szerokość logo = szerokość strony minus marginesy
+        page_width = A4[0] - 2 * cm  # ~19.5 cm
+        logo_width = page_width
+        logo_height = logo_width * aspect_ratio
+        
+        # Utwórz obiekt Image z obliczonymi wymiarami
+        logo = Image(logo_path, width=logo_width, height=logo_height)
+        logo.hAlign = 'CENTER'
+        
+        # Dodaj logo na początku
+        result = [logo, Spacer(1, 0.3 * cm)]
+        result.extend(elements)
+        
+        return result
+        
+    except Exception as e:
+        print(f"⚠️  Błąd dodawania logo: {e}")
+        return elements
+
+
 
 def create_top_section(client_name: str, summary_title: str,
                        summary_data: List[List[str]]) -> List:
@@ -540,7 +594,8 @@ def generate_pdf(client_name: str, summary_title: str,
                  summary_data: List[List[str]],
                  tables: List[Dict[str, Any]],
                  filename: str = "raport.pdf",
-                 subfolder: str = None) -> str:
+                 subfolder: str = None,
+                 logo_path: str = None) -> str:
     """
     Generuje PDF z dynamiczną liczbą tabel.
 
@@ -562,7 +617,7 @@ def generate_pdf(client_name: str, summary_title: str,
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         leftMargin=1 * cm, rightMargin=1 * cm,
-        topMargin=1 * cm, bottomMargin=1 * cm,
+        topMargin=0.5 * cm, bottomMargin=1 * cm,
     )
 
     elements = create_top_section(client_name, summary_title, summary_data)
@@ -576,16 +631,44 @@ def generate_pdf(client_name: str, summary_title: str,
             col_widths=t.get('column_widths'),
             add_total_row=t.get('add_total_row', True),
             currency_columns=t.get('currency_columns', []),
+            currency_columns_2=t.get('currency_columns_2', []),
             percentage_columns=t.get('percentage_columns', []),
             subtitle=t.get('subtitle', ''),
         )
-        elements.append(table)
+
+        elements.append(KeepTogether(table))
+
+        #elements.append(table)
         if i < len(tables) - 1:
             elements.append(Spacer(1, 0.3 * cm))
+    if logo_path:
+        elements = add_logo_to_elements(elements, logo_path)
 
     doc.build(elements)
     print(f"✓ PDF: {output_path} ({len(tables)} tabel)")
     return output_path
+
+
+# =========================================================================
+#  WORKER DLA MULTIPROCESSING
+# =========================================================================
+
+def _render_pdf_task(args):
+    """
+    Funkcja robocza dla ProcessPoolExecutor.
+    Przyjmuje serializowalny payload (dict) i generuje PDF.
+    Każdy proces importuje moduł niezależnie = bezpieczne.
+    """
+    payload, logo_path = args
+    return generate_pdf(
+        client_name=payload['client_name'],
+        summary_title=payload['summary_title'],
+        summary_data=payload['summary_data'],
+        tables=payload['tables'],
+        filename=payload['filename'],
+        subfolder=payload['subfolder'],
+        logo_path=logo_path,
+    )
 
 
 # =========================================================================
@@ -601,57 +684,50 @@ if __name__ == "__main__":
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Tryb: {'MOCK' if USE_MOCK else 'SAP HANA'}")
     print("=" * 60)
+    
+    LOGO_PATH = "logo.png"
 
-    # Na razie skupiamy się na 2 szablonach wykonania:
     ACTIVE_TYPES = [
         ReportType.WYKONANIE_A_TYP_A_TYDZIEN,  # per umowa (wszystkie sklepy)
-        # ReportType.WYKONANIE_A_TYP_B_TYDZIEN,  # per lokalizacja (wybrany sklep)
+        ReportType.WYKONANIE_A_TYP_B_TYDZIEN,  # per lokalizacja (wybrany sklep)
+        #ReportType.WYKONANIE_C_TYP_A_TYDZIEN,
     ]
-    
-    # Opcjonalnie: generuj tylko dla wybranej umowy (ustaw na None aby generować dla wszystkich)
-    SINGLE_CONTRACT = None  # Zmień na numer umowy lub None
+    SINGLE_CONTRACT = None
+    MAX_WORKERS = min(6, (os.cpu_count() or 2))  # procesy do renderowania PDF
 
     with Timer("Generowanie raportów") as total:
+
         factory = None
         try:
-            # 1 połączenie na cały run
-            connection = get_hana_connection()
-            factory = ReportFactory(config_dir="config", connection=connection)
-
-            # BATCH PREFETCH – wszystkie dane za jednym razem
-            factory.prepare_batch(report_types=ACTIVE_TYPES)
+            factory = ReportFactory(config_dir="config")
 
             # Pobierz listę umów
             contracts = factory.get_contracts_list()
-            
-            # Filtruj jeśli wybrano konkretną umowę
+
             if SINGLE_CONTRACT:
-                contracts = [c for c in contracts if c['nr_umowy'] == SINGLE_CONTRACT]
+                contracts = [c for c in contracts if c ['nr_umowy'] == SINGLE_CONTRACT]
                 if not contracts:
-                    print(f"\n✗ Nie znaleziono umowy: {SINGLE_CONTRACT}")
+                    print("Nie znaleziono")
                     exit(0)
-            
+
             print(f"\n📋 Umowy ({len(contracts)}):")
             for c in contracts:
-                print(f"   {c['nr_umowy']}  {c['klient']}  [{c['podtyp_klient']}]")
+                print(f"   {c['nr_umowy']}  {c['klient']}  [{c['podtyp_klient']}]  ID={c['id']}  PLA={c['pla']}")
 
-            # Rozdziel typy A (1 raport per nr_umowy) i B (1 raport per klient)
             TYP_A_TYPES = [rt for rt in ACTIVE_TYPES if rt in (
                 ReportType.WYKONANIE_A_TYP_A_TYDZIEN,
-                ReportType.WYKONANIE_B_TYP_A_TYDZIEN,
-                ReportType.ROZLICZENIE_A_KWARTAL,
-                ReportType.ROZLICZENIE_B_KWARTAL,
-                ReportType.ROZLICZENIE_B_MIESIAC,
+                #ReportType.WYKONANIE_B_TYP_A_TYDZIEN
+                #ReportType.WYKONANIE_C_TYP_A_TYDZIEN,
             )]
+
             TYP_B_TYPES = [rt for rt in ACTIVE_TYPES if rt in (
                 ReportType.WYKONANIE_A_TYP_B_TYDZIEN,
-                ReportType.WYKONANIE_B_TYP_B_TYDZIEN,
+                #ReportType.WYKONANIE_B_TYP_A_TYDZIEN
             )]
 
             all_generated = []
-            pdf_tasks = []  # (report_type, nr, lokalizacja)
+            pdf_tasks = []
 
-            # --- Typ A: 1 raport per unikalna umowa ---
             if TYP_A_TYPES:
                 seen_nr = set()
                 for c in contracts:
@@ -661,33 +737,128 @@ if __name__ == "__main__":
                     seen_nr.add(nr)
                     for rt in TYP_A_TYPES:
                         if rt in factory.configs:
-                            pdf_tasks.append((rt, nr, None))
+                            pdf_tasks.append((rt, nr, None, c['pla'], c['id']))
 
-            # --- Typ B: 1 raport per klient (każdy wiersz) ---
+            # --- Typ B: 1 raport per lokalizacja (sklep) ---
             if TYP_B_TYPES:
+                seen_nr_b = set()
                 for c in contracts:
                     nr = c['nr_umowy']
-                    for rt in TYP_B_TYPES:
-                        if rt in factory.configs:
-                            pdf_tasks.append((rt, nr, None))
+                    if nr in seen_nr_b:
+                        continue
+                    seen_nr_b.add(nr)
+                    locations = factory.get_locations_for_contract(nr)
+                    print(f"  📍 {nr}: {len(locations)} lokalizacji")
+                    for lok in locations:
+                        for rt in TYP_B_TYPES:
+                            if rt in factory.configs:
+                                pdf_tasks.append((rt, nr, lok, c['pla'], c['id']))
 
-            # --- Równoległe generowanie PDF ---
-            MAX_WORKERS = min(8, os.cpu_count() or 4)
-            print(f"\n⚡ Generowanie {len(pdf_tasks)} raportów ({MAX_WORKERS} wątków)...")
+            # =============================================================
+            #  FAZA 1: BATCH PREFETCH — pobierz WSZYSTKIE dane z HANA
+            # =============================================================
+            factory.prepare_batch(ACTIVE_TYPES)
 
-            def _gen_task(task):
-                rt, nr, lok = task
-                return factory.generate_report(rt, nr, lokalizacja=lok)
+            # =============================================================
+            #  FAZA 2: Budowanie payloadów (sekwencyjnie, używa cache)
+            # =============================================================
+            total_tasks = len(pdf_tasks)
+            print(f"\n📦 Budowanie {total_tasks} payloadów...")
 
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-                futures = {pool.submit(_gen_task, t): t for t in pdf_tasks}
+            payloads = []       # (payload, task_info) do renderowania
+            csv_log_rows = []   # log do CSV
+
+            for idx, (rt, nr, lok, pla, cid) in enumerate(pdf_tasks, 1):
+                try:
+                    payload = factory.build_report_payload(
+                        rt, nr, lokalizacja=lok, pla=pla, contract_id=cid,
+                    )
+                    payloads.append((payload, (rt, nr, lok, pla, cid)))
+
+                    # --- Zbierz dane do CSV (już tu, bo mamy pełne dane) ---
+                    csv_row = {
+                        'plik': payload['filename'],
+                        'typ_raportu': rt.value,
+                        'nr_umowy': nr,
+                        'lokalizacja': lok or '',
+                        'pla': pla or '',
+                        'id': cid or '',
+                        'klient': payload['client_name'],
+                    }
+                    for label, value in payload['summary_data']:
+                        csv_row[f'summary_{label}'] = value
+                    for table in payload['tables']:
+                        tname = table['title']
+                        sub = table.get('subtitle', '')
+                        prefix = f"{tname}_{sub}" if sub else tname
+                        headers = table['headers']
+                        csv_row[f'{prefix}_wiersze'] = len(table['data'])
+                        for row_idx, row_data in enumerate(table['data'], 1):
+                            for col_idx, hdr in enumerate(headers):
+                                val = row_data[col_idx] if col_idx < len(row_data) else ''
+                                csv_row[f'{prefix}_w{row_idx}_{hdr}'] = val
+                    csv_log_rows.append(csv_row)
+
+                except Exception as e:
+                    print(f"  X {rt.value} nr={nr}: {e}")
+                    csv_log_rows.append({
+                        'plik': 'BŁĄD',
+                        'typ_raportu': rt.value,
+                        'nr_umowy': nr,
+                        'lokalizacja': lok or '',
+                        'pla': pla or '',
+                        'id': cid or '',
+                        'klient': '',
+                        'error': str(e),
+                    })
+
+            # Zamknij połączenie z bazą — dane już w pamięci
+            factory.close()
+            factory = None
+
+            # =============================================================
+            #  FAZA 3: Renderowanie PDF — równolegle (ProcessPoolExecutor)
+            # =============================================================
+            from concurrent.futures import ProcessPoolExecutor, as_completed
+
+            print(f"\n⚡ Renderowanie {len(payloads)} PDF-ów ({MAX_WORKERS} procesów)...")
+
+            render_args = [(p, LOGO_PATH) for p, _ in payloads]
+
+            with ProcessPoolExecutor(max_workers=MAX_WORKERS) as pool:
+                futures = {
+                    pool.submit(_render_pdf_task, arg): payloads[i][1]
+                    for i, arg in enumerate(render_args)
+                }
+                done_count = 0
                 for future in as_completed(futures):
+                    task_info = futures[future]
+                    rt, nr, lok, pla, cid = task_info
                     try:
-                        path = future.result()
+                        path = future.result(timeout=120)
                         all_generated.append(path)
+                        done_count += 1
+                        if done_count % 100 == 0:
+                            print(f"   ✓ {done_count}/{len(payloads)} gotowych")
                     except Exception as e:
-                        task = futures[future]
-                        print(f"  ✗ {task[0].value} nr={task[1]}: {e}")
+                        print(f"  X render {rt.value} nr={nr}: {e}")
+
+            # --- Zapisz log CSV ---
+            if csv_log_rows:
+                csv_path = os.path.join(
+                    get_output_folder(),
+                    f"generation_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                )
+                all_keys = []
+                for row in csv_log_rows:
+                    for k in row:
+                        if k not in all_keys:
+                            all_keys.append(k)
+                with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.DictWriter(f, fieldnames=all_keys, delimiter=';')
+                    writer.writeheader()
+                    writer.writerows(csv_log_rows)
+                print(f"\n📊 Log CSV: {csv_path}")
 
             print(f"\n{'─' * 50}")
             print(f"✓ Wygenerowano {len(all_generated)} raportów")

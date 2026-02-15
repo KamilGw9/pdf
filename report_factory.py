@@ -20,17 +20,40 @@ import os
 
 from main import (
     get_hana_connection,
-    get_output_folder,
-    save_generation_log,
-    generate_pdf,
     Timer,
-    FONT_REGULAR,
-    FONT_BOLD,
-    TEXT_COLOR,
-    BASE_OUTPUT_DIR,
 )
 
-from report_types import ReportType, TableConfig, ReportDataV2
+from report_types import ReportType
+
+
+# ======================================================================
+#  PARAMETRYZACJA ZAPYTAŃ SQL
+# ======================================================================
+
+def _parameterize_query(query: str, nr: str = None,
+                        lokalizacja: str = None) -> tuple:
+    """
+    Zamienia placeholdery {nr}/{lok} na parametry wiązane (?).
+    Zwraca (query_z_?, lista_parametrów) — bezpieczne przed SQL injection.
+    """
+    params = []
+    result = query
+
+    # Zbierz pozycje placeholderów i posortuj wg pozycji
+    replacements = []
+    if nr is not None and "'{nr}'" in result:
+        replacements.append(("'{nr}'", str(nr), result.find("'{nr}'")))
+    if lokalizacja is not None and "'{lok}'" in result:
+        replacements.append(("'{lok}'", str(lokalizacja), result.find("'{lok}'")))
+
+    # Sortuj wg pozycji w query (zachowaj kolejność parametrów)
+    replacements.sort(key=lambda x: x[2])
+
+    for placeholder, value, _ in replacements:
+        result = result.replace(placeholder, '?', 1)
+        params.append(value)
+
+    return result.strip(), params
 
 
 # ======================================================================
@@ -75,34 +98,37 @@ class QueryCache:
         q = query.strip()
 
         # Wykryj oryginalne filtry (przed podstawieniem {nr}/{lok})
-        has_nr_filter = '{nr}' in q or re.search(r"nr_umowy\s*=\s*'[^']*'", q)
-        has_lok_filter = '{lok}' in q or re.search(r"nazwa_sklepu\s*=\s*'[^']*'", q)
+        # Obsługuje zarówno placeholdery {nr}/{lok} jak i literały 'wartość'
+        _nr_pattern = r"nr_umowy\s*=\s*(?:'\{nr\}'|'[^']*')"
+        _lok_pattern = r"nazwa_sklepu\s*=\s*(?:'\{lok\}'|'[^']*')"
+        has_nr_filter = bool(re.search(_nr_pattern, q, re.IGNORECASE))
+        has_lok_filter = bool(re.search(_lok_pattern, q, re.IGNORECASE))
 
-        # Usuń filtr nr_umowy z WHERE
+        # Usuń filtr nr_umowy z WHERE (trzy warianty pozycji w klauzuli)
         q_clean = re.sub(
-            r"\s+AND\s+nr_umowy\s*=\s*'[^']*'",
+            r"\s+AND\s+" + _nr_pattern,
             '', q, flags=re.IGNORECASE
         )
         q_clean = re.sub(
-            r"nr_umowy\s*=\s*'[^']*'\s*AND\s*",
+            _nr_pattern + r"\s*AND\s*",
             '', q_clean, flags=re.IGNORECASE
         )
         q_clean = re.sub(
-            r"nr_umowy\s*=\s*'[^']*'",
+            _nr_pattern,
             '1=1', q_clean, flags=re.IGNORECASE
         )
 
         # Usuń filtr nazwa_sklepu z WHERE
         q_clean = re.sub(
-            r"\s+AND\s+nazwa_sklepu\s*=\s*'[^']*'",
+            r"\s+AND\s+" + _lok_pattern,
             '', q_clean, flags=re.IGNORECASE
         )
         q_clean = re.sub(
-            r"nazwa_sklepu\s*=\s*'[^']*'\s*AND\s*",
+            _lok_pattern + r"\s*AND\s*",
             '', q_clean, flags=re.IGNORECASE
         )
         q_clean = re.sub(
-            r"nazwa_sklepu\s*=\s*'[^']*'",
+            _lok_pattern,
             '1=1', q_clean, flags=re.IGNORECASE
         )
 
@@ -219,13 +245,13 @@ class QueryCache:
         _, nr_col, lok_col, added_count = self._get_base_query_cached(template)
 
         if template not in self._cache:
-            # Fallback – zapytanie tradycyjne
-            resolved = query_template.replace('{nr}', str(nr)).strip()
-            if lokalizacja:
-                resolved = resolved.replace('{lok}', str(lokalizacja))
+            # Fallback – zapytanie z parametrami wiązanymi (bezpieczne)
+            resolved, params = _parameterize_query(
+                query_template, nr=nr, lokalizacja=lokalizacja
+            )
             cursor = self._conn.cursor()
             try:
-                cursor.execute(resolved)
+                cursor.execute(resolved, params)
                 rows = cursor.fetchall()
                 self._query_count += 1
                 return [
@@ -340,15 +366,15 @@ class ReportFactory:
         if self._cache is not None:
             return self._cache.get(query, nr=nr, lokalizacja=lokalizacja)
 
-        # Fallback – bezpośrednie zapytanie (bez batch)
+        # Fallback – bezpośrednie zapytanie z parametrami wiązanymi
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
-            resolved_query = query.replace('{nr}', str(nr)).strip()
-            if lokalizacja:
-                resolved_query = resolved_query.replace('{lok}', str(lokalizacja))
-            print(f"    SQL: {resolved_query}")
-            cursor.execute(resolved_query)
+            resolved_query, params = _parameterize_query(
+                query, nr=nr, lokalizacja=lokalizacja
+            )
+            print(f"    SQL: {resolved_query}  params={params}")
+            cursor.execute(resolved_query, params)
             try:
                 rows = cursor.fetchall()
                 return [
@@ -369,8 +395,13 @@ class ReportFactory:
         if not rows:
             return [[label, ''] for label in labels]
 
-        # Pierwszy wiersz wyników → mapuj na etykiety
+        # Walidacja: liczba kolumn vs etykiet
         values = rows[0]
+        if len(values) != len(labels):
+            print(f"  ⚠️  Summary: oczekiwano {len(labels)} kolumn, "
+                  f"otrzymano {len(values)} – dane mogą być niepoprawne")
+
+        # Pierwszy wiersz wyników → mapuj na etykiety
         return [
             [label, values[i] if i < len(values) else '']
             for i, label in enumerate(labels)
@@ -388,7 +419,8 @@ class ReportFactory:
     def get_contracts_list(self) -> List[Dict[str, Any]]:
         """
         Pobiera listę unikalnych umów z HANA.
-        Zwraca listę słowników: [{'nr_umowy': ..., 'klient': ..., 'podtyp_klient': ...}, ...]
+        Zwraca listę słowników z kluczami:
+          nr_umowy, klient, podtyp_klient, id, pla
         
         DOSTOSUJ zapytanie do swojej tabeli!
         """
@@ -397,7 +429,7 @@ class ReportFactory:
         try:
             # ZMIEŃ nazwę tabeli na swoją:
             query = """
-                SELECT DISTINCT nr_umowy, klient, podtyp_klient 
+                SELECT DISTINCT nr_umowy, klient, podtyp_klient, id, pla
                 FROM your_contracts_table
                 ORDER BY nr_umowy
             """
@@ -405,22 +437,17 @@ class ReportFactory:
             rows = cursor.fetchall()
             contracts = []
             for row in rows:
-                if row and len(row) >= 3:
+                if row and len(row) >= 5:
                     contracts.append({
                         'nr_umowy': str(row[0]),
                         'klient': str(row[1]),
                         'podtyp_klient': str(row[2]),
+                        'id': str(row[3]),
+                        'pla': str(row[4]),
                     })
             return contracts
         finally:
             cursor.close()
-
-    def get_clients_list(self) -> List[str]:
-        """
-        Zwraca listę unikalnych nr_umowy (kompatybilność wsteczna).
-        """
-        contracts = self.get_contracts_list()
-        return [c['nr_umowy'] for c in contracts]
 
     def get_locations_for_contract(self, nr_umowy: str) -> List[str]:
         """
@@ -442,17 +469,17 @@ class ReportFactory:
                         if shops:
                             return shops
 
-        # Fallback – bezpośrednie zapytanie
+        # Fallback – bezpośrednie zapytanie z parametrem wiązanym
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
-            query = f"""
+            query = """
                 SELECT DISTINCT nazwa_sklepu 
                 FROM your_shops_table
-                WHERE nr_umowy = '{nr_umowy}'
+                WHERE nr_umowy = ?
                 ORDER BY nazwa_sklepu
             """
-            cursor.execute(query)
+            cursor.execute(query, [str(nr_umowy)])
             rows = cursor.fetchall()
             return [str(row[0]) for row in rows if row]
         finally:
@@ -462,18 +489,19 @@ class ReportFactory:
     #  GENEROWANIE RAPORTÓW
     # ------------------------------------------------------------------
 
-    def generate_report(self, report_type: ReportType, nr: str,
-                        lokalizacja: str = None) -> str:
+    @staticmethod
+    def _get_year_quarter() -> Tuple[str, str]:
+        """Zwraca bieżący rok i kwartał, np. ('2026', 'Q1')."""
+        now = datetime.now()
+        quarter = (now.month - 1) // 3 + 1
+        return str(now.year), f"Q{quarter}"
+
+    def build_report_payload(self, report_type: ReportType, nr: str,
+                             lokalizacja: str = None,
+                             pla: str = None,
+                             contract_id: str = None) -> Dict[str, Any]:
         """
-        Generuje pojedynczy raport PDF dla danego numeru umowy.
-
-        Args:
-            report_type: Typ raportu (enum)
-            nr: Numer umowy (parametr do zapytania SQL)
-            lokalizacja: Nazwa lokalizacji (tylko dla Typ B)
-
-        Returns:
-            Ścieżka do wygenerowanego PDF
+        Buduje kompletny payload raportu (bez renderowania PDF).
         """
         if report_type not in self.configs:
             raise ValueError(f"Brak konfiguracji: {report_type.value}")
@@ -481,14 +509,11 @@ class ReportFactory:
         config = self.configs[report_type]
         print(f"\n→ {config['report_type']} | NR={nr}")
 
-        # Pobierz podsumowanie
         with Timer("  Podsumowanie"):
             summary_data = self._fetch_summary(config, nr)
 
-        # Nazwa klienta z pierwszego wiersza podsumowania (jeśli jest)
         client_name = summary_data[0][1] if summary_data and len(summary_data[0]) > 1 else str(nr)
 
-        # Pobierz dane tabel
         tables = []
         for table_cfg in config['data_tables']:
             with Timer(f"  {table_cfg['title']}"):
@@ -500,80 +525,36 @@ class ReportFactory:
                     'headers': table_cfg['headers'],
                     'data': data,
                     'currency_columns': fmt.get('currency_columns', []),
+                    'currency_columns_2': fmt.get('currency_columns_2', []),
                     'percentage_columns': fmt.get('percentage_columns', []),
                     'add_total_row': fmt.get('add_total_row', True),
                     'column_widths': fmt.get('column_widths'),
                 })
 
-        # Generuj PDF — każdy NR = osobny plik
-        safe_nr = str(nr).replace('/', '_').replace('\\', '_')
+        # --- Nazwa pliku PDF ---
+        year, quarter = self._get_year_quarter()
+        safe_pla = str(pla).replace('/', '_').replace('\\', '_') if pla else 'BRAK_PLA'
+        safe_id = str(contract_id).replace('/', '_').replace('\\', '_') if contract_id else 'BRAK_ID'
+
         if lokalizacja:
-            safe_lok = lokalizacja.replace(' ', '_').replace('/', '_')
-            filename = f"{report_type.value}_{safe_nr}_{safe_lok}.pdf"
+            # Typ B: PLA_ID_2026_Q1_ZAMAWIAJACY.pdf
+            filename = f"{safe_pla}_{safe_id}_{year}_{quarter}_ZAMAWIAJACY.pdf"
         else:
-            filename = f"{report_type.value}_{safe_nr}.pdf"
-        subfolder = report_type.value.replace('_', '#')
+            # Typ A: PLA_ID_2026_Q1.pdf
+            filename = f"{safe_pla}_{safe_id}_{year}_{quarter}.pdf"
 
-        with Timer(f"  PDF ({len(tables)} tabel)"):
-            pdf_path = generate_pdf(
-                client_name=client_name,
-                summary_title=config['summary']['title'],
-                summary_data=summary_data,
-                tables=tables,
-                filename=filename,
-                subfolder=subfolder,
-            )
+        # Statystyki tabel (liczba wierszy danych)
+        table_stats = [
+            f"{t['title']}: {len(t['data'])} wierszy" for t in tables
+        ]
 
-        return pdf_path
-
-    def generate_all_for_nr(self, nr: str,
-                            report_types: List[ReportType] = None) -> List[str]:
-        """
-        Generuje wybrane (lub wszystkie) typy raportów dla numeru umowy.
-
-        Typ A = generuje dla każdej umowy (wszystkie sklepy)
-        Typ B = generuje dla każdej lokalizacji osobno
-
-        Args:
-            nr: Numer umowy
-            report_types: Lista typów (None = wszystkie skonfigurowane)
-
-        Returns:
-            Lista ścieżek do wygenerowanych PDF
-        """
-        types = report_types or list(self.configs.keys())
-        generated = []
-
-        for rt in types:
-            if rt not in self.configs:
-                print(f"  ⚠️  Pomijam {rt.value} - brak konfiguracji")
-                continue
-            try:
-                # Typ B – generuj per lokalizacja (osobny raport dla każdego sklepu)
-                if rt in (ReportType.WYKONANIE_A_TYP_B_TYDZIEN,
-                          ReportType.WYKONANIE_B_TYP_B_TYDZIEN):
-                    locations = self.get_locations_for_contract(nr)
-                    print(f"  📍 Lokalizacje ({len(locations)}): {locations}")
-                    for lok in locations:
-                        try:
-                            path = self.generate_report(rt, nr, lokalizacja=lok)
-                            generated.append(path)
-                        except Exception as e:
-                            print(f"  ✗ {rt.value} lok={lok}: {e}")
-                # Typ A – jeden raport per umowa (wszystkie sklepy razem)
-                elif rt in (ReportType.WYKONANIE_A_TYP_A_TYDZIEN,
-                            ReportType.WYKONANIE_B_TYP_A_TYDZIEN,
-                            ReportType.ROZLICZENIE_A_KWARTAL,
-                            ReportType.ROZLICZENIE_B_KWARTAL,
-                            ReportType.ROZLICZENIE_B_MIESIAC):
-                    path = self.generate_report(rt, nr)
-                    generated.append(path)
-                else:
-                    # Fallback dla nieznanych typów
-                    path = self.generate_report(rt, nr)
-                    generated.append(path)
-            except Exception as e:
-                print(f"  ✗ {rt.value}: {e}")
-
-        return generated
+        return {
+            'client_name': client_name,
+            'summary_title': config['summary']['title'],
+            'summary_data': summary_data,
+            'tables': tables,
+            'filename': filename,
+            'subfolder': report_type.value.replace('_', '#'),
+            'table_stats': table_stats,
+        }
 
